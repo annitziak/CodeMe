@@ -35,7 +35,8 @@
         - Tags for categorization.
         - User metadata
 
-Look also : [**CodeSearchNet](https://github.com/github/CodeSearchNet/tree/master)** 
+Look also : [CodeSearchNet](https://github.com/github/CodeSearchNet/tree/master) <br>
+Have not tried to download to look data structure,yet.
 
 ### **2. Research Paper Information Retrieval**
 
