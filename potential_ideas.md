@@ -3,8 +3,8 @@
 ### Essential features
 
 1. Indexer 
-2. Retrieval models (boolean, search, proximity search etc) → BM25 
-3. Nice interface
+2. Retrieval models (boolean, search, proximity search etc) → e.g. BM25 
+3. Nice interface <br>
 → focus on scalability
 
 ### Extra features
