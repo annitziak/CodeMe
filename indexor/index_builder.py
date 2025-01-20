@@ -37,8 +37,7 @@ class IndexBuilder:
 
     def process_posts(self):
         with self.db_connection as conn:
-            conn.cur.execute("SELECT min(id) as minid, max(id) as maxid FROM posts")
-            min_id, max_id = conn.cur.fetchone()
+            min_id, max_id, num_posts = self._get_id_stats(conn)
 
         chunk_size = (max_id - min_id) // self.num_shards
         partitions = [
@@ -60,6 +59,20 @@ class IndexBuilder:
                 future.result()
 
     def _process_posts_shard(self, shard: int, start: int, end: int, db_params: dict):
+        """
+        Process a shard of posts and builds the inverted index.
+        Each shard is responsible for processing a range of post IDs.
+        Each shard opens a new connection to the database.
+
+        Args:
+            shard: int
+            start: int
+            end: int
+            db_params: dict
+
+        Returns:
+            term_docs: dict
+        """
         logger.info("Processing shard %d: %d-%d", shard, start, end)
 
         proc_conn = DBConnection(db_params)
@@ -87,8 +100,20 @@ class IndexBuilder:
                         term_docs[term][post_id] = tf
 
         logger.info(f"Processed shard {shard}: {start}-{end} => {len(term_docs)} terms")
+        return term_docs
 
     def _process_posts_batch(self, rows: tuple[list]):
+        """
+        A generator that processes a batch of posts and yields the post ID and document terms for each post
+        This is called by _process_posts_shard to process a batch of posts for each shard
+
+        Args:
+            rows: list of tuples
+
+        Yields:
+            post_id: int
+            doc_terms: dict
+        """
         for row in rows:
             post_id, title, body, tags = row
 
@@ -103,6 +128,26 @@ class IndexBuilder:
 
     def _tokenize(self, text: str):
         return text.lower().split()
+
+    def _get_id_stats(self, conn):
+        """
+        Get the min and max post IDs and the total number of posts in the database.
+
+        Args:
+            conn: DBConnection object
+
+        Returns:
+            min_id: int
+            max_id: int
+            num_posts: int
+        """
+        conn.execute("SELECT min(id) as minid, max(id) as maxid FROM posts")
+        min_id, max_id = conn.cur.fetchone()
+
+        conn.execute("SELECT count(*) FROM posts")
+        num_posts = conn.cur.fetchone()[0]
+
+        return min_id, max_id, num_posts
 
 
 if __name__ == "__main__":
