@@ -43,7 +43,9 @@ class IndexBuilder:
         partitions = [
             (i * chunk_size, (i + 1) * chunk_size) for i in range(self.num_shards)
         ]
-        with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=min(os.cpu_count() - 2, 8)
+        ) as executor:
             futures = [
                 executor.submit(
                     self._process_posts_shard,
@@ -152,12 +154,8 @@ class IndexBuilder:
 
 if __name__ == "__main__":
     import os
+    from constants import DB_PARAMS
 
-    db_params = {
-        "dbname": os.getenv("POSTGRES_DB"),
-        "user": os.getenv("POSTGRES_USER"),
-    }
     index_path = ".cache/index"
-
-    builder = IndexBuilder(db_params, index_path)
+    builder = IndexBuilder(DB_PARAMS, index_path)
     builder.process_posts()

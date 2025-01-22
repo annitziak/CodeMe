@@ -41,7 +41,7 @@ class DBConnection:
         return self.conn.cursor()
 
     def connect(self):
-        logger.info("Connecting to database...")
+        logger.info(f"Connecting to database with {self.db_params} ...")
         if self.is_connected():
             logger.warning("Already connected to database.")
             return self

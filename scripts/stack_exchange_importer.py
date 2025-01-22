@@ -36,7 +36,8 @@ class StackExchangeImporter:
         table_name = os.path.basename(xml_file).split(".")[0]
         columns = []
 
-        self.db_connection.execute(f"DROP TABLE IF EXISTS {table_name}")
+        if False:
+            self.db_connection.execute(f"DROP TABLE IF EXISTS {table_name}")
 
         pk_col = self.primary_keys.get(table_name.lower(), None)
 
@@ -58,11 +59,12 @@ class StackExchangeImporter:
         if pk_col is not None:
             columns.append(f"PRIMARY KEY ({pk_col})")
 
-        create_table_query = f"CREATE TABLE {table_name} ({', '.join(columns)})"
-        self.db_connection.execute(create_table_query, commit=True)
-        logger.info(
-            f"Table {table_name} created with statement: '{pprint.pformat(create_table_query)}'"
-        )
+        if False:
+            create_table_query = f"CREATE TABLE {table_name} ({', '.join(columns)})"
+            self.db_connection.execute(create_table_query, commit=True)
+            logger.info(
+                f"Table {table_name} created with statement: '{pprint.pformat(create_table_query)}'"
+            )
 
     def insert_data_from_xml(self, xml_file):
         try:
@@ -104,22 +106,37 @@ class StackExchangeImporter:
         except Exception as e:
             self.db_connection.rollback()
             logger.error(f"Error inserting data from {xml_file}: {e}")
-            raise Exception(f"Error inserting data from {xml_file}")
 
     def alter_table(self, table_name):
         logger.info(f"Altering table {table_name}")
         if table_name.lower() in self.foreign_keys:
             foreign_keys = self.foreign_keys[table_name.lower()]
             for column_name, ref_table, ref_column in foreign_keys:
-                alter_table_query = f"ALTER TABLE {table_name} ADD FOREIGN KEY ({column_name}) REFERENCES {ref_table} ({ref_column})"
+                drop_constraint_query = f"ALTER TABLE {table_name} DROP CONSTRAINT IF EXISTS {table_name}_{column_name}_fkey"
                 logger.info(
-                    f"Altering table {table_name} with statement: '{pprint.pformat(alter_table_query)}'"
+                    f"Dropping constraint with statement: '{pprint.pformat(drop_constraint_query)}'"
                 )
-                self.db_connection.execute(alter_table_query, commit=True)
-                logger.info(f"Table {table_name} altered")
+                self.db_connection.execute(drop_constraint_query, commit=False)
+                logger.info(f"Constraint dropped on table {table_name}")
+
+                index_create_quer = f"CREATE INDEX ON {table_name} ({column_name})"
+                logger.info(
+                    f"Creating index with statement: '{pprint.pformat(index_create_quer)}'"
+                )
+                self.db_connection.execute(index_create_quer, commit=True)
+
+                try:
+                    alter_table_query = f"ALTER TABLE {table_name} ADD FOREIGN KEY ({column_name}) REFERENCES {ref_table} ({ref_column})"
+                    logger.info(
+                        f"Altering table {table_name} with statement: '{pprint.pformat(alter_table_query)}'"
+                    )
+                    self.db_connection.execute(alter_table_query, commit=True)
+                    logger.info(f"Table {table_name} altered")
+                except Exception as e:
+                    logger.error(f"Error altering table {table_name}: {e}")
 
     def _insert_batch(self, table_name, columns, batch):
-        insert_query = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES %s"
+        insert_query = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES %s ON CONFLICT DO NOTHING"
         self.db_connection.execute_values(
             insert_query, batch, page_size=len(batch), commit=True
         )
@@ -258,18 +275,16 @@ if __name__ == "__main__":
     importer.add_primary_key("tags", "Id")
     importer.add_primary_key("postlinks", "Id")
 
-    # importer.add_foreign_key("posthistory", "postId", "posts", "Id") # postId missing in posts
+    importer.add_foreign_key("posthistory", "postId", "posts", "Id")
     importer.add_foreign_key("posthistory", "userId", "users", "Id")
 
     importer.add_foreign_key("posts", "owneruserId", "users", "Id")
     importer.add_foreign_key("posts", "lasteditoruserId", "users", "Id")
 
     importer.add_foreign_key("comments", "userId", "users", "Id")
-    # importer.add_foreign_key("comments", "postId", "posts", "Id") # postId missing in posts
+    importer.add_foreign_key("comments", "postId", "posts", "Id")
 
-    importer.add_foreign_key(
-        "votes", "postId", "posts", "Id"
-    )  # postId missing in posts
+    importer.add_foreign_key("votes", "postId", "posts", "Id")
 
     importer.add_foreign_key("badges", "userId", "users", "Id")
 
@@ -281,6 +296,7 @@ if __name__ == "__main__":
     try:
         if args.xml_file:
             importer.process_xml(args.xml_file)
+            exit(0)
 
         if args.xml_dir is None:
             args.xml_dir = os.getenv("STACKOVERFLOW_XML_DIR")
