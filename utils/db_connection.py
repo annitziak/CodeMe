@@ -32,7 +32,7 @@ class DBConnection:
     def is_connected(self):
         return self.conn is not None and self.conn.closed == 0
 
-    def get_cursor(self, name: str = None):
+    def get_cursor(self, name: str | None = None):
         if not self.is_connected():
             raise Exception("Not connected to database.")
 
