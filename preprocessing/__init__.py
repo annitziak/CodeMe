@@ -10,6 +10,9 @@ class TextSize(IntEnum):
     H5 = 5
     H6 = 6
     P = 7
+    OL = 7
+    UL = 7
+    LI = 7
 
 
 @dataclass

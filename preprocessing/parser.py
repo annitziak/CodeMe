@@ -85,12 +85,10 @@ class HTMLParserInterface:
         **kwargs,
     ):
         if tag == "code":
-            if parent_tag != "pre":
-                text_block = CodeBlock(text=text, block_id=id, in_line=True)
-            elif parent_tag == "pre":
+            if parent_tag == "pre":
                 text_block = CodeBlock(text=text, block_id=id, in_line=False)
             else:
-                raise ValueError("Parent element is not recognized.")
+                text_block = CodeBlock(text=text, block_id=id, in_line=True)
         elif tag in ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "ul", "ol"]:
             text_block = NormalTextBlock(
                 text=text,
@@ -170,6 +168,6 @@ if __name__ == "__main__":
         ]
 
         for test_html in test_htmls:
-            print(test_html)
             parser.parse(test_html)
             print(parser.get_data())
+            print(test_html)
