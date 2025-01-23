@@ -20,6 +20,9 @@ fi
 
 sed "s#input_path#$INPUT_PATH#g" read_dump.sql > create_dump_with_path.sql
 
-psql -d "${DB_NAME}" -f read_dump_with_path.sql
+echo "Running the following command:"
+echo "psql -d ${DB_NAME} -f create_dump_with_path.sql"
 
-rm read_dump_with_path.sql
+psql -d "${DB_NAME}" -f create_dump_with_path.sql
+
+rm create_dump_with_path.sql
