@@ -1,49 +1,12 @@
 import logging
 
-from enum import IntEnum
+from preprocessing import CodeBlock, LinkBlock, NormalTextBlock, TextSize
 from lxml import etree
-from dataclasses import dataclass
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
-class TextSize(IntEnum):
-    H1 = 1
-    H2 = 2
-    H3 = 3
-    H4 = 4
-    H5 = 5
-    H6 = 6
-    P = 7
-
-
-@dataclass
-class Block:
-    text: str
-    block_id: int
-
-
-@dataclass
-class NormalTextBlock(Block):
-    is_italic: bool = False
-    is_bold: bool = False
-    is_underline: bool = False
-
-    text_size: int = TextSize.P
-
-
-@dataclass
-class LinkBlock(NormalTextBlock):
-    href: str = ""
-    alt_text: str = ""
-
-
-@dataclass
-class CodeBlock(Block):
-    in_line: bool = False
 
 
 class HTMLParserInterface:
@@ -55,11 +18,13 @@ class HTMLParserInterface:
     def feed(self, data: str):
         self.parser.feed(data)
 
-    def add_data(self, data: str):
+    def parse(self, data: str):
         self.root = etree.fromstring(data, self.parser)
         self.text_blocks = sorted(
             self.process_element(self.root)[0], key=lambda x: x.block_id
         )
+
+        return self.text_blocks
 
     def process_element(self, element: etree.Element, parent_element=None, id=0):
         if element is None:
@@ -69,7 +34,6 @@ class HTMLParserInterface:
             element, parent_element=parent_element, id=id
         )
         element_results = []
-        tabs = "\t" * id
 
         child_id = id
         for child in element:
@@ -127,7 +91,7 @@ class HTMLParserInterface:
                 text_block = CodeBlock(text=text, block_id=id, in_line=False)
             else:
                 raise ValueError("Parent element is not recognized.")
-        elif tag in ["p", "h1", "h2", "h3", "h4", "h5", "h6"]:
+        elif tag in ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "ul", "ol"]:
             text_block = NormalTextBlock(
                 text=text,
                 block_id=id,
@@ -187,7 +151,7 @@ if __name__ == "__main__":
                 for post in posts:
                     post_id, body = post
                     print(body)
-                    parser.add_data(body)
+                    parser.parse(body)
                     print(f"Post ID: {post_id}")
                     print(f"Body: {parser.get_data()}")
                     print("\n")
@@ -207,5 +171,5 @@ if __name__ == "__main__":
 
         for test_html in test_htmls:
             print(test_html)
-            parser.add_data(test_html)
+            parser.parse(test_html)
             print(parser.get_data())
