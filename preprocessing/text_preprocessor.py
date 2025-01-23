@@ -1,10 +1,10 @@
 import logging
 import pprint
 
+from preprocessing import NormalTextBlock, LinkBlock, CodeBlock, Block
 from preprocessing.parser import HTMLParserInterface
 from preprocessing.tokenizer import Tokenizer
 from preprocessing.normalizer import (
-    Normalizer,
     StopWordNormalizer,
     StemmingNormalizer,
     LowerCaseNormalizer,
@@ -17,22 +17,25 @@ logger = logging.getLogger(__name__)
 
 
 class HTMLPreprocessor:
-    def __init__(self, parser_kwargs={}):
-        # replace with factory method to build the correct parser
-        self.html_parser = HTMLParserInterface(**parser_kwargs)
-        self.tokenizer = Tokenizer()
-        self.normalizer = Normalizer(
-            operations=[
+    def __init__(
+        self,
+        parser_kwargs={},
+        tokenizer_kwargs={
+            "text_normalizer_operations": [
                 LowerCaseNormalizer(),
                 StopWordNormalizer(stop_words_file="data/stop_words.txt"),
                 StemmingNormalizer(),
             ]
-        )
+        },
+    ):
+        # replace with factory method to build the correct parser
+        self.html_parser = HTMLParserInterface(**parser_kwargs)
+        self.tokenizer = Tokenizer(**tokenizer_kwargs)
 
     def preprocess(self, text):
         text_blocks = self.html_parser.parse(text)
         for text_block in text_blocks:
-            text_block.words = self.normalizer(self.tokenizer(text_block))
+            text_block.words = self.tokenizer(text_block)
 
         return text_blocks
 
@@ -41,16 +44,27 @@ if __name__ == "__main__":
     import argparse
 
     from constants.db import DB_PARAMS
-    from preprocessing import NormalTextBlock
     from utils.db_connection import DBConnection
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=1000)
     parser.add_argument("--use-test-data", action="store_true")
+    parser.add_argument(
+        "--inspect-block", choices=["normal", "link", "code"], default=None
+    )
     args = parser.parse_args()
 
     preprocessor = HTMLPreprocessor()
     db_connection = DBConnection(DB_PARAMS)
+
+    inspect_block = Block
+    if args.inspect_block is not None:
+        if args.inspect_block == "normal":
+            inspect_block = NormalTextBlock
+        elif args.inspect_block == "link":
+            inspect_block = LinkBlock
+        else:
+            inspect_block = CodeBlock
 
     if not args.use_test_data:
         with db_connection as conn:
@@ -65,9 +79,7 @@ if __name__ == "__main__":
                 for post in posts:
                     post_id, body = post
                     text_blocks = preprocessor.preprocess(body)
-                    pprint.pp(
-                        [x for x in text_blocks if isinstance(x, NormalTextBlock)]
-                    )
+                    pprint.pp([x for x in text_blocks if isinstance(x, inspect_block)])
 
                 should_continue = input("Continue? [(y)/n]: ")
                 if should_continue.lower() == "n":
@@ -133,5 +145,5 @@ if __name__ == "__main__":
 
         for test_html in test_htmls:
             text_blocks = preprocessor.preprocess(test_html)
-            pprint.pp([x for x in text_blocks if isinstance(x, NormalTextBlock)])
+            pprint.pp([x for x in text_blocks if isinstance(x, inspect_block)])
             input("Press Enter to continue...")

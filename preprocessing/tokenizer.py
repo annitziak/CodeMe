@@ -2,6 +2,7 @@ import re
 import logging
 
 from preprocessing import CodeBlock, NormalTextBlock as TextBlock, LinkBlock, Term
+from preprocessing.normalizer import Normalizer
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -10,14 +11,69 @@ logger = logging.getLogger(__name__)
 
 
 class CodeTokenizer:
+    def __init__(self):
+        """
+        Naive tokenizer for code snippets
+
+        Based on keywords and operators found
+        """
+        token_patterns = {
+            "identifier": re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b"),
+            "number": re.compile(r"\b\d+(\.\d+)?\b"),
+            "string": re.compile(r"\".*?\""),
+            "comment": re.compile(r"#.*"),
+            "operator": re.compile(r"[-+*/%&|^~<>!]=?"),
+            "punctuation": re.compile(r"[.,;:()\[\]{}\\]"),
+            "whitespace": re.compile(r"\s+"),
+        }
+
+        self.token_re = re.compile(
+            "|".join(
+                f"(?P<{name}>{pattern.pattern})"
+                for name, pattern in token_patterns.items()
+            )
+        )
+
+    def __call__(self, *args, **kwargs):
+        return self.tokenize(*args, **kwargs)
+
     def tokenize(self, text):
-        return []
+        tokens = []
+        for match in self.token_re.finditer(text):
+            for _, pattern in match.groupdict().items():
+                if pattern is not None:
+                    if pattern.strip() == "":
+                        continue
 
-    def _tokenize(self, text):
-        return []
+                    tokens.append(
+                        Term(
+                            term=pattern,
+                            original_term=pattern,
+                            position=match.start(),
+                            start_char_offset=match.start(),
+                            end_char_offset=match.end(),
+                        )
+                    )
+                    break
+
+        return tokens
 
 
-class WhitespaceTokenizer:
+class ClassicTokenizer:
+    """
+    This tokenizer is based on the classic tokenizer in Elasticsearch
+    https://www.elastic.co/guide/en/elasticsearch/reference/current/analysis-classic-tokenizer.html
+
+    The following main points are applied:
+        - Replaces hyphens with a whitespace (e.g. "High-performance" -> "High performance")
+        - Recognises emails and URLs
+        - Splits text based on regex defined word boundaries
+        - Contractions are combined into a single token (e.g. "I've" -> "Ive")
+        - Replaces double whitespace with a single whitespace
+
+    We do not explictly remove punctuation as the regex pattern matches words and therefore punctuation is removed if it is not part of a word or we are not explicitly looking for it
+    """
+
     def __init__(self):
         self.email_address_re = re.compile(
             r"(?:[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)"
@@ -33,6 +89,9 @@ class WhitespaceTokenizer:
             """,
             re.VERBOSE,
         )
+
+    def __call__(self, *args, **kwargs):
+        return self.tokenize(*args, **kwargs)
 
     def tokenize(self, text):
         """
@@ -107,18 +166,27 @@ class LinkTokenizer:
 
 
 class Tokenizer:
-    def __init__(self):
+    def __init__(
+        self,
+        text_normalizer_operations=[],
+        code_normalizer_operations=[],
+        link_normalizer_operations=[],
+    ):
         self.code_tokenizer = CodeTokenizer()
-        self.text_tokenizer = WhitespaceTokenizer()
+        self.text_tokenizer = ClassicTokenizer()
         self.link_tokenizer = LinkTokenizer()
+
+        self.text_normalizer = Normalizer(text_normalizer_operations)
+        self.code_normalizer = Normalizer(code_normalizer_operations)
+        self.link_normalizer = Normalizer(link_normalizer_operations)
 
     def __call__(self, *args, **kwargs):
         return self.tokenize(*args, **kwargs)
 
     def tokenize(self, text_block):
         if isinstance(text_block, CodeBlock):
-            return self.code_tokenizer.tokenize(text_block.text)
+            return self.code_normalizer(self.code_tokenizer(text_block.text))
         elif isinstance(text_block, TextBlock):
-            return self.text_tokenizer.tokenize(text_block.text)
+            return self.text_normalizer(self.text_tokenizer(text_block.text))
         elif isinstance(text_block, LinkBlock):
-            return self.link_tokenizer.tokenize(text_block.text)
+            return self.link_normalizer(self.link_tokenizer(text_block.text))
