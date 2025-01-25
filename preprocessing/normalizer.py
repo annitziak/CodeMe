@@ -1,4 +1,5 @@
 import os
+import unicodedata
 import Stemmer
 
 from abc import ABC, abstractmethod
@@ -47,8 +48,28 @@ class StemmingNormalizer(SubNormalizer):
     def __init__(self):
         self.stemmer = Stemmer.Stemmer("english")
 
+    def __getstate__(self) -> object:
+        data = self.__dict__.copy()
+        del data["stemmer"]
+
+        return data
+
+    def __setstate__(self, state: object) -> None:
+        self.__dict__.update(state)
+        self.stemmer = Stemmer.Stemmer("english")
+
     def normalize_term(self, term: Term):
         term.term = self.stemmer.stemWord(term.term)
+
+
+class NfdNormalizer(SubNormalizer):
+    """
+    Normalizes the term to Normal Form such that it is decomposed into its base
+    Removes accents and other diacritics
+    """
+
+    def normalize_term(self, term: Term):
+        term.term = unicodedata.normalize("NFD", term.term)
 
 
 class Normalizer:

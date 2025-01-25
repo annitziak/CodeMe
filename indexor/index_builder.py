@@ -2,12 +2,16 @@ import logging
 import concurrent.futures
 
 from collections import defaultdict
+
+from preprocessing.preprocessor import Preprocessor
 from utils.db_connection import DBConnection
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+DEV_SHARDS = 1
 
 
 class IndexBuilder:
@@ -17,6 +21,7 @@ class IndexBuilder:
         index_path: str,
         batch_size: int = 1000,
         num_shards: int = 128,
+        debug=False,
     ) -> None:
         self.db_params = db_params
         self.db_connection = DBConnection(db_params)
@@ -24,7 +29,12 @@ class IndexBuilder:
         self.index_path = index_path
 
         self.batch_size = batch_size
-        self.num_shards = num_shards
+        self.num_shards = num_shards if not debug else DEV_SHARDS
+
+        self.title_preprocessor = Preprocessor(parser_kwargs={"parser_type": "raw"})
+        self.body_preprocessor = Preprocessor(parser_kwargs={"parser_type": "html"})
+
+        self.debug = debug
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -38,13 +48,18 @@ class IndexBuilder:
     def process_posts(self):
         with self.db_connection as conn:
             min_id, max_id, num_posts = self._get_id_stats(conn)
+            logger.info(
+                f"Retrieved post stats: min_id={min_id}, max_id={max_id}, num_posts={num_posts}"
+            )
+            max_id = max_id if not self.debug else min_id + 1000
 
         chunk_size = (max_id - min_id) // self.num_shards
         partitions = [
             (i * chunk_size, (i + 1) * chunk_size) for i in range(self.num_shards)
         ]
+        logger.info(f"Processing {num_posts} posts in {self.num_shards} shards")
         with concurrent.futures.ProcessPoolExecutor(
-            max_workers=min(os.cpu_count() - 2, 8)
+            max_workers=min(2, 8)  # os.cpu_count() - 2
         ) as executor:
             futures = [
                 executor.submit(
@@ -58,7 +73,8 @@ class IndexBuilder:
             ]
 
             for future in concurrent.futures.as_completed(futures):
-                future.result()
+                terms = future.result()
+                print(terms)
 
     def _process_posts_shard(self, shard: int, start: int, end: int, db_params: dict):
         """
@@ -75,14 +91,14 @@ class IndexBuilder:
         Returns:
             term_docs: dict
         """
-        logger.info("Processing shard %d: %d-%d", shard, start, end)
 
         proc_conn = DBConnection(db_params)
         with proc_conn as conn:
             cur = conn.get_cursor(name="index_builder")
+            # include tags???
             cur.execute(
                 """
-                SELECT id, title, body, tags
+                SELECT id, title, body
                 FROM posts
                 WHERE id >= %s AND id < %s
                 """,
@@ -90,15 +106,21 @@ class IndexBuilder:
             )
             logger.info("Processing shard %d: %d-%d", shard, start, end)
 
-            term_docs = defaultdict(lambda: defaultdict(float))
+            term_docs = {}
 
             while True:
                 batch = cur.fetchmany(self.batch_size)
                 if not batch:
+                    logger.info(
+                        f"Finished processing shard {shard} with {len(term_docs)} terms"
+                    )
                     break
 
                 for post_id, doc_terms in self._process_posts_batch(batch):
                     for term, tf in doc_terms.items():
+                        if term not in term_docs:
+                            term_docs[term] = {}
+
                         term_docs[term][post_id] = tf
 
         logger.info(f"Processed shard {shard}: {start}-{end} => {len(term_docs)} terms")
@@ -117,19 +139,25 @@ class IndexBuilder:
             doc_terms: dict
         """
         for row in rows:
-            post_id, title, body, tags = row
+            post_id, title, body = row
 
             doc_terms = defaultdict(float)
 
-            for field, text in [("title", title), ("body", body), ("tags", tags)]:
-                terms = self._tokenize(text)
-                for term in terms:
-                    doc_terms[term] += 1.0
+            for field, text in [("title", title), ("body", body)]:
+                blocks = self._tokenize(text, field=field)
+                for block in blocks:
+                    for term in block:
+                        doc_terms[term.term] += 1.0
 
             yield post_id, doc_terms
 
-    def _tokenize(self, text: str):
-        return text.lower().split()
+    def _tokenize(self, text: str, field: str = "body"):
+        if field == "title":
+            return self.title_preprocessor(text)
+        elif field == "body":
+            return self.body_preprocessor(text)
+        else:
+            raise ValueError(f"Invalid field: {field}")
 
     def _get_id_stats(self, conn):
         """
@@ -146,16 +174,24 @@ class IndexBuilder:
         conn.execute("SELECT min(id) as minid, max(id) as maxid FROM posts")
         min_id, max_id = conn.cur.fetchone()
 
-        conn.execute("SELECT count(*) FROM posts")
+        # estimate the number of posts (COUNT(*) is slow)
+        conn.execute(
+            "SELECT reltuples AS estimate FROM pg_class WHERE relname = 'posts';"
+        )
         num_posts = conn.cur.fetchone()[0]
 
         return min_id, max_id, num_posts
 
 
 if __name__ == "__main__":
-    import os
+    import argparse
+
     from constants import DB_PARAMS
 
-    index_path = ".cache/index"
-    builder = IndexBuilder(DB_PARAMS, index_path)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--index_path", type=str, default=".cache/index")
+    parser.add_argument("--debug", action="store_true")
+    args = parser.parse_args()
+
+    builder = IndexBuilder(DB_PARAMS, args.index_path, debug=args.debug)
     builder.process_posts()

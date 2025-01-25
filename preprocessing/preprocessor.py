@@ -2,12 +2,13 @@ import logging
 import pprint
 
 from preprocessing import NormalTextBlock, LinkBlock, CodeBlock, Block
-from preprocessing.parser import HTMLParserInterface
+from preprocessing.parser import DefaultParserInterface, HTMLParserInterface
 from preprocessing.tokenizer import Tokenizer
 from preprocessing.normalizer import (
     StopWordNormalizer,
     StemmingNormalizer,
     LowerCaseNormalizer,
+    NfdNormalizer,
 )
 
 logging.basicConfig(
@@ -16,21 +17,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class HTMLPreprocessor:
+def BuildParser(parser_type: str, **kwargs):
+    if parser_type == "html":
+        return HTMLParserInterface(**kwargs)
+    elif parser_type == "raw":
+        return DefaultParserInterface()
+    else:
+        raise ValueError(
+            f"Parser type {parser_type} not recognized. Use 'html' or 'raw'"
+        )
+
+
+class Preprocessor:
     def __init__(
         self,
         parser_kwargs={},
         tokenizer_kwargs={
             "text_normalizer_operations": [
                 LowerCaseNormalizer(),
-                StopWordNormalizer(stop_words_file="data/stop_words.txt"),
+                StopWordNormalizer(stop_words_file="preprocessing/stop_words.txt"),
                 StemmingNormalizer(),
+                NfdNormalizer(),
             ]
         },
     ):
         # replace with factory method to build the correct parser
-        self.html_parser = HTMLParserInterface(**parser_kwargs)
+        self.html_parser = BuildParser(**parser_kwargs)
         self.tokenizer = Tokenizer(**tokenizer_kwargs)
+
+    def __call__(self, text):
+        return self.preprocess(text)
 
     def preprocess(self, text):
         text_blocks = self.html_parser.parse(text)
@@ -54,7 +70,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    preprocessor = HTMLPreprocessor()
+    preprocessor = Preprocessor(parser_kwargs={"parser_type": "html"})
     db_connection = DBConnection(DB_PARAMS)
 
     inspect_block = Block

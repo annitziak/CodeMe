@@ -19,6 +19,9 @@ class StackExchangeImporter:
         self.primary_keys = {}
         self.foreign_keys = {}
 
+        # Columns are nullable, wait for column to exist before creating table
+        self.required_columns = {}
+
     def __del__(self):
         self.db_connection.disconnect()
 
@@ -31,19 +34,53 @@ class StackExchangeImporter:
 
         self.foreign_keys[table_name].append((column_name, ref_table, ref_column))
 
-    def create_table_from_xml(self, xml_file):
+    def add_required_column(self, table_name, column_name):
+        table_name = table_name.lower()
+        if table_name not in self.required_columns:
+            self.required_columns[table_name] = set()
+
+        self.required_columns[table_name].add(column_name)
+
+    def create_table_from_xml(self, xml_file, drop_table=False):
         context = ET.iterparse(xml_file, events=("start", "end"))
         table_name = os.path.basename(xml_file).split(".")[0]
         columns = []
 
-        if False:
-            self.db_connection.execute(f"DROP TABLE IF EXISTS {table_name}")
+        required_column_names = self.required_columns.get(table_name.lower(), set())
+        column_names = set()
+
+        if drop_table:
+            logger.info(f"Dropping table {table_name}")
+            confirm_drop = input(
+                f"Are you sure you want to drop table {table_name}? (y/(n))"
+            )
+            if confirm_drop.lower() == "y":
+                self.db_connection.execute(
+                    f"DROP TABLE IF EXISTS {table_name}", commit=False
+                )
+            else:
+                logger.info(f"Table {table_name} not dropped")
+                return
 
         pk_col = self.primary_keys.get(table_name.lower(), None)
+        logger.info(
+            f"Creating table {table_name} and required columns {required_column_names} from current column names {column_names}"
+        )
 
         for _, elem in context:
-            if elem.tag == "row":
+            if (
+                elem.tag == "row"
+                and len(required_column_names.difference(column_names)) > 0
+            ):
+                logger.info(
+                    f"Missing required columns {required_column_names}. Only found {column_names} for table {table_name}"
+                )
                 for key, value in elem.attrib.items():
+                    if key not in column_names:
+                        column_names.add(key)
+                    else:
+                        continue
+
                     if value.isdigit():
                         columns.append(f"{key} INT")
                     elif value.lower() in ["true", "false"]:
@@ -54,26 +91,28 @@ class StackExchangeImporter:
                         columns.append(f"{key} INT")
                     else:
                         columns.append(f"{key} TEXT")
+            elif elem.tag == "row":
                 break
 
         if pk_col is not None:
             columns.append(f"PRIMARY KEY ({pk_col})")
 
-        if False:
+        if drop_table:
             create_table_query = f"CREATE TABLE {table_name} ({', '.join(columns)})"
             self.db_connection.execute(create_table_query, commit=True)
             logger.info(
                 f"Table {table_name} created with statement: '{pprint.pformat(create_table_query)}'"
             )
 
-    def insert_data_from_xml(self, xml_file):
+        return column_names
+
+    def insert_data_from_xml(self, xml_file, columns=None):
         try:
             context = ET.iterparse(xml_file, events=("start", "end"))
             table_name = os.path.basename(xml_file).split(".")[0]
 
             batch_size = 1000
             batch = []
-            columns = None
             pk_col = self.primary_keys.get(table_name.lower(), None)
 
             for _, elem in context:
@@ -107,6 +146,12 @@ class StackExchangeImporter:
             self.db_connection.rollback()
             logger.error(f"Error inserting data from {xml_file}: {e}")
 
+    def _insert_batch(self, table_name, columns, batch):
+        insert_query = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES %s ON CONFLICT DO NOTHING"
+        self.db_connection.execute_values(
+            insert_query, batch, page_size=len(batch), commit=True
+        )
+
     def alter_table(self, table_name):
         logger.info(f"Altering table {table_name}")
         if table_name.lower() in self.foreign_keys:
@@ -126,20 +171,30 @@ class StackExchangeImporter:
                 self.db_connection.execute(index_create_quer, commit=True)
 
                 try:
-                    alter_table_query = f"ALTER TABLE {table_name} ADD FOREIGN KEY ({column_name}) REFERENCES {ref_table} ({ref_column})"
-                    logger.info(
-                        f"Altering table {table_name} with statement: '{pprint.pformat(alter_table_query)}'"
+                    self._alter_table_exec(
+                        table_name, column_name, ref_table, ref_column
                     )
-                    self.db_connection.execute(alter_table_query, commit=True)
-                    logger.info(f"Table {table_name} altered")
                 except Exception as e:
+                    self._add_dummy_rows(table_name, column_name, ref_table, ref_column)
+                    self._alter_table_exec(
+                        table_name, column_name, ref_table, ref_column
+                    )
                     logger.error(f"Error altering table {table_name}: {e}")
 
-    def _insert_batch(self, table_name, columns, batch):
-        insert_query = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES %s ON CONFLICT DO NOTHING"
-        self.db_connection.execute_values(
-            insert_query, batch, page_size=len(batch), commit=True
+    def _alter_table_exec(self, table_name, column_name, ref_table, ref_column):
+        alter_table_query = f"ALTER TABLE {table_name} ADD FOREIGN KEY ({column_name}) REFERENCES {ref_table} ({ref_column})"
+        logger.info(
+            f"Altering table {table_name} with statement: '{pprint.pformat(alter_table_query)}'"
         )
+        self.db_connection.execute(alter_table_query, commit=True)
+        logger.info(f"Table {table_name} altered")
+
+    def _add_dummy_rows(self, table_name, column_name, ref_table, ref_column):
+        logger.info(
+            f"Adding dummy rows to {table_name} to satisfy foreign key constraint"
+        )
+        insert_query = f"INSERT INTO {table_name} ({column_name}) SELECT DISTINCT {ref_column} FROM {ref_table} WHERE {ref_column} NOT IN (SELECT {column_name} FROM {table_name})"
+        self.db_connection.execute(insert_query, commit=False)
 
     def _is_timestamp(self, value):
         try:
@@ -148,11 +203,13 @@ class StackExchangeImporter:
         except ValueError:
             return False
 
-    def process_xml(self, xml_file):
-        self.create_table_from_xml(xml_file)
-        self.insert_data_from_xml(xml_file)
+    def process_xml(self, xml_file, drop_table=False):
+        column_names = self.create_table_from_xml(xml_file, drop_table=drop_table)
+        self.insert_data_from_xml(xml_file, column_names)
 
-    def process_directory(self, xml_dir, num_workers, process_xml=True):
+    def process_directory(
+        self, xml_dir, num_workers, process_xml=True, drop_table=False
+    ):
         xml_files = [
             os.path.join(xml_dir, f) for f in os.listdir(xml_dir) if f.endswith(".xml")
         ]
@@ -161,7 +218,10 @@ class StackExchangeImporter:
             with ThreadPoolExecutor(
                 max_workers=min(len(xml_files), num_workers)
             ) as executor:
-                futures = [executor.submit(self.process_xml, f) for f in xml_files]
+                futures = [
+                    executor.submit(self.process_xml, f, drop_table=drop_table)
+                    for f in xml_files
+                ]
 
                 for future in futures:
                     future.result()
@@ -244,6 +304,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Utility script to read Stack Exchange XML files and import them into a PostgreSQL database"
     )
+
+    parser.add_argument("--drop-table", action="store_true", help="Drop the table")
     parser.add_argument("--xml-file", help="Path to the XML file")
     parser.add_argument(
         "--xml-dir",
@@ -267,7 +329,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     importer.add_primary_key("posthistory", "Id")
-    importer.add_primary_key("posts", "Id")
+    importer.add_primary_key("post2", "Id")
     importer.add_primary_key("users", "Id")
     importer.add_primary_key("votes", "Id")
     importer.add_primary_key("comments", "Id")
@@ -275,27 +337,29 @@ if __name__ == "__main__":
     importer.add_primary_key("tags", "Id")
     importer.add_primary_key("postlinks", "Id")
 
-    importer.add_foreign_key("posthistory", "postId", "posts", "Id")
+    importer.add_foreign_key("posthistory", "postId", "post2", "Id")
     importer.add_foreign_key("posthistory", "userId", "users", "Id")
 
-    importer.add_foreign_key("posts", "owneruserId", "users", "Id")
-    importer.add_foreign_key("posts", "lasteditoruserId", "users", "Id")
+    importer.add_foreign_key("post2", "owneruserId", "users", "Id")
+    importer.add_foreign_key("post2", "lasteditoruserId", "users", "Id")
 
     importer.add_foreign_key("comments", "userId", "users", "Id")
-    importer.add_foreign_key("comments", "postId", "posts", "Id")
+    importer.add_foreign_key("comments", "postId", "post2", "Id")
 
-    importer.add_foreign_key("votes", "postId", "posts", "Id")
+    importer.add_foreign_key("votes", "postId", "post2", "Id")
 
     importer.add_foreign_key("badges", "userId", "users", "Id")
 
-    importer.add_foreign_key("postlinks", "postId", "posts", "Id")
-    importer.add_foreign_key("postlinks", "relatedpostId", "posts", "Id")
+    importer.add_foreign_key("postlinks", "postId", "post2", "Id")
+    importer.add_foreign_key("postlinks", "relatedpostId", "post2", "Id")
 
-    importer.add_foreign_key("tags", "excerptpostId", "posts", "Id")
+    importer.add_foreign_key("tags", "excerptpostId", "post2", "Id")
+
+    importer.add_required_column("post2", "ParentId")
 
     try:
         if args.xml_file:
-            importer.process_xml(args.xml_file)
+            importer.process_xml(args.xml_file, drop_table=args.drop_table)
             exit(0)
 
         if args.xml_dir is None:
@@ -307,10 +371,16 @@ if __name__ == "__main__":
         if args.xml_dir:
             if not args.create_test_xml:
                 importer.process_directory(
-                    args.xml_dir, num_workers=4, process_xml=not args.alter_table
+                    args.xml_dir,
+                    num_workers=4,
+                    process_xml=not args.alter_table,
+                    drop_table=args.drop_table,
                 )
             else:
-                importer.process_directory_create_test_xml(args.xml_dir, args.save_dir)
+                importer.process_directory_create_test_xml(
+                    args.xml_dir,
+                    args.save_dir,
+                )
 
     except Exception as e:
         logger.error(e)

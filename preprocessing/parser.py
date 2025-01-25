@@ -1,4 +1,5 @@
 import logging
+import copy
 
 from preprocessing import CodeBlock, LinkBlock, NormalTextBlock, TextSize
 from lxml import etree
@@ -9,30 +10,55 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class DefaultParserInterface:
+    def __init__(self):
+        self.text_blocks = []
+
+    def parse(self, data: str):
+        text_block = NormalTextBlock(text=data, block_id=0, text_size=TextSize.P)
+        self.text_blocks.append(text_block)
+
+        return self.text_blocks
+
+
 class HTMLParserInterface:
     def __init__(self):
         self.parser = etree.HTMLParser()
         self.root = etree.fromstring("<html></html>", self.parser)
         self.text_blocks = []
 
+    def __getstate__(self) -> object:
+        data = self.__dict__.copy()
+        del data["parser"]
+        del data["root"]
+
+        return data
+
+    def __setstate__(self, state: object):
+        self.__dict__.update(state)
+        self.parser = etree.HTMLParser()
+        self.root = etree.fromstring("<html></html>", self.parser)
+
     def feed(self, data: str):
         self.parser.feed(data)
 
     def parse(self, data: str):
         self.root = etree.fromstring(data, self.parser)
-        self.text_blocks = sorted(
-            self.process_element(self.root)[0], key=lambda x: x.block_id
-        )
+        self.text_blocks, _ = self.process_element(self.root)
+        self.text_blocks = sorted(self.text_blocks, key=lambda x: x.block_id)
 
         return self.text_blocks
 
-    def process_element(self, element: etree.Element, parent_element=None, id=0):
+    def process_element(
+        self, element: etree.Element, parent_element=None, parent_block=None, id=0
+    ):
         if element is None:
-            return
+            return [], None
 
         element_result, tailing_text = self._handle_element(
-            element, parent_element=parent_element, id=id
+            element, parent_element=parent_element, parent_block=parent_block, id=id
         )
+
         element_results = []
 
         child_id = id
@@ -40,7 +66,7 @@ class HTMLParserInterface:
             child_id += 1
 
             child_element_result, child_tailing_text = self.process_element(
-                child, parent_element=element, id=child_id
+                child, parent_element=element, parent_block=element_result, id=child_id
             )
             if child_element_result is not None:
                 element_results.extend(child_element_result)
@@ -52,7 +78,13 @@ class HTMLParserInterface:
             if child_tailing_text is not None and element_result is not None:
                 child_id += 1
                 secondary_text_block, _ = self._handle_tag(
-                    tag=element.tag, text=child_tailing_text, id=child_id
+                    tag=element.tag,
+                    text=child_tailing_text,
+                    id=child_id,
+                    parent_tag=(
+                        parent_element.tag if parent_element is not None else ""
+                    ),
+                    parent_block=parent_block,
                 )
                 if secondary_text_block is not None:
                     element_results.append(secondary_text_block)
@@ -65,12 +97,15 @@ class HTMLParserInterface:
     def get_data(self) -> str:
         return etree.tostring(self.root, pretty_print=True)
 
-    def _handle_element(self, element: etree.Element, parent_element=None, **kwargs):
+    def _handle_element(
+        self, element: etree.Element, parent_element=None, parent_block=None, **kwargs
+    ):
         return self._handle_tag(
             tag=element.tag,
             text=element.text,
             tail=element.tail,
             parent_tag=parent_element.tag if parent_element is not None else "",
+            parent_block=parent_block,
             attrib=element.attrib,
             **kwargs,
         )
@@ -81,34 +116,94 @@ class HTMLParserInterface:
         text: str = "",
         tail: str = "",
         parent_tag: str = "",
+        parent_block=None,
         id: int = -1,
         **kwargs,
     ):
+        if parent_block is not None:
+            parent_block = copy.deepcopy(parent_block)
+
         if tag == "code":
             if parent_tag == "pre":
-                text_block = CodeBlock(text=text, block_id=id, in_line=False)
+                text_block = CodeBlock(
+                    text=text,
+                    block_id=id,
+                    in_line=False,
+                ).update(parent_block)
             else:
-                text_block = CodeBlock(text=text, block_id=id, in_line=True)
-        elif tag in ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "ul", "ol"]:
+                text_block = CodeBlock(
+                    text=text,
+                    block_id=id,
+                    in_line=True,
+                ).update(parent_block)
+        elif tag in ["p", "h1", "h2", "h3", "h4", "h5", "h6"]:
             text_block = NormalTextBlock(
                 text=text,
                 block_id=id,
-                text_size=TextSize[tag.upper()],
-            )
+                text_size=self._get_text_size(tag),
+            ).update(parent_block)
         elif tag == "a":
             text_block = LinkBlock(
                 text=text,
                 block_id=id,
                 href=kwargs.get("attrib", {}).get("href", ""),
                 alt_text=kwargs.get("attrib", {}).get("alt", ""),
-                text_size=TextSize[parent_tag.upper()],
-            )
+                text_size=self._get_text_size(parent_tag),
+            ).update(parent_block)
         elif tag in ["strong", "b"]:
-            text_block = NormalTextBlock(text=text, block_id=id, is_bold=True)
+            text_block = NormalTextBlock(
+                text=text,
+                block_id=id,
+                is_bold=True,
+            ).update(parent_block)
         elif tag in ["em", "i"]:
-            text_block = NormalTextBlock(text=text, block_id=id, is_italic=True)
+            text_block = NormalTextBlock(
+                text=text,
+                block_id=id,
+                is_italic=True,
+            ).update(parent_block)
         elif tag == "u":
-            text_block = NormalTextBlock(text=text, block_id=id, is_underline=True)
+            text_block = NormalTextBlock(
+                text=text,
+                block_id=id,
+                is_underline=True,
+            ).update(parent_block)
+        elif tag == "sup":
+            text_block = NormalTextBlock(
+                text=text,
+                block_id=id,
+                is_superscript=True,
+            ).update(parent_block)
+        elif tag in ["s", "del"]:
+            text_block = NormalTextBlock(
+                text=text,
+                block_id=id,
+                is_strike_through=True,
+            ).update(parent_block)
+        elif tag in ["li", "ul", "ol"]:
+            text_block = NormalTextBlock(
+                text=text,
+                block_id=id,
+                is_list=True,
+            ).update(parent_block)
+        elif tag == "blockquote":
+            text_block = NormalTextBlock(
+                text=text,
+                block_id=id,
+                is_blockquote=True,
+            ).update(parent_block)
+        elif tag in ["ul", "ol", "li"]:
+            text_block = NormalTextBlock(
+                text=text,
+                block_id=id,
+                is_list=True,
+            ).update(parent_block)
+        elif text in ["dd", "dt", "dl"]:
+            text_block = NormalTextBlock(
+                text=text,
+                block_id=id,
+                is_desciption_list=True,
+            ).update(parent_block)
         else:
             return None, None
 
@@ -121,9 +216,17 @@ class HTMLParserInterface:
 
         return parent
 
+    def _get_text_size(self, tag: str):
+        upper_tag = tag.upper()
+        if upper_tag in TextSize.__members__:
+            return TextSize[upper_tag]
+
+        return TextSize.UNK
+
 
 if __name__ == "__main__":
     import argparse
+    import pprint
 
     from constants.db import DB_PARAMS
     from utils.db_connection import DBConnection
@@ -161,6 +264,7 @@ if __name__ == "__main__":
         test_htmls = [
             """
         <html>
+        <h2>Test the handling fo <strong>strong or <i>bold and italic</i></strong> text</h2>
         <p>This is a piece of text with <strong>typing</strong> but also tailing text. And then some extra <strong>text</strong> for laughs.</p>
         </html>
         """,
@@ -168,6 +272,6 @@ if __name__ == "__main__":
         ]
 
         for test_html in test_htmls:
-            parser.parse(test_html)
-            print(parser.get_data())
+            text_blocks = parser.parse(test_html)
+            pprint.pp(text_blocks)
             print(test_html)

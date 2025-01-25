@@ -17,46 +17,77 @@ class CodeTokenizer:
 
         Based on keywords and operators found
         """
-        token_patterns = {
-            "identifier": re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b"),
-            "number": re.compile(r"\b\d+(\.\d+)?\b"),
-            "string": re.compile(r"\".*?\""),
-            "comment": re.compile(r"#.*"),
-            "operator": re.compile(r"[-+*/%&|^~<>!]=?"),
-            "punctuation": re.compile(r"[.,;:()\[\]{}\\]"),
-            "whitespace": re.compile(r"\s+"),
-        }
-
-        self.token_re = re.compile(
-            "|".join(
-                f"(?P<{name}>{pattern.pattern})"
-                for name, pattern in token_patterns.items()
-            )
+        self.literal_re = re.compile(
+            r'(\d+|".*?|\'.*?\'|True|False|true|false|null|None|NaN|Inf)'
         )
+        self.symbols = set("+-*/=()[]{}<>:;,.!@#$%^&|~`")
 
     def __call__(self, *args, **kwargs):
         return self.tokenize(*args, **kwargs)
 
     def tokenize(self, text):
         tokens = []
-        for match in self.token_re.finditer(text):
-            for _, pattern in match.groupdict().items():
-                if pattern is not None:
-                    if pattern.strip() == "":
-                        continue
+        buffer = ""
+        for idx, char in enumerate(text):
+            if not char.isspace() and char not in self.symbols:
+                buffer += char
+                continue
 
-                    tokens.append(
-                        Term(
-                            term=pattern,
-                            original_term=pattern,
-                            position=match.start(),
-                            start_char_offset=match.start(),
-                            end_char_offset=match.end(),
-                        )
+            if len(buffer) > 0:
+                if not self._add_literal(buffer, tokens, idx):
+                    self._add_identifier(buffer, tokens, idx)
+
+                buffer = ""
+
+            if char in self.symbols:
+                tokens.append(
+                    Term(
+                        term=char,
+                        original_term=char,
+                        position=len(tokens),
+                        start_char_offset=idx,
+                        end_char_offset=idx + 1,
                     )
-                    break
+                )
+
+        if len(buffer) > 0:
+            if not self._add_literal(buffer, tokens, len(text)):
+                self._add_identifier(buffer, tokens, len(text))
 
         return tokens
+
+    def _add_literal(self, buffer, tokens, idx):
+        if self.literal_re.match(buffer):
+            tokens.append(
+                Term(
+                    term=buffer,
+                    original_term=buffer,
+                    position=len(tokens),
+                    start_char_offset=idx - len(buffer),
+                    end_char_offset=idx,
+                )
+            )
+            return True
+
+        return False
+
+    def _add_identifier(self, buffer, tokens, idx):
+        encoded = self._encode(buffer)
+        curr_end = idx
+        for token in encoded[::-1]:
+            tokens.append(
+                Term(
+                    term=token,
+                    original_term=buffer,
+                    position=len(tokens),
+                    start_char_offset=curr_end - len(token),
+                    end_char_offset=curr_end,
+                )
+            )
+            curr_end -= len(token)
+
+    def _encode(self, text):
+        return text.split(" ")
 
 
 class ClassicTokenizer:
@@ -93,7 +124,7 @@ class ClassicTokenizer:
     def __call__(self, *args, **kwargs):
         return self.tokenize(*args, **kwargs)
 
-    def tokenize(self, text):
+    def tokenize(self, text, is_orderable=True):
         """
         Replaces all punctuation with an empty string
         Replaces all double whitespace with a single whitespace
@@ -105,10 +136,10 @@ class ClassicTokenizer:
         if not text or not text.strip() or len(text) == 0:
             return []
 
-        tokens = self._tokenize(text)
+        tokens = self._tokenize(text, is_orderable=is_orderable)
         return tokens
 
-    def _tokenize(self, text) -> list[Term]:
+    def _tokenize(self, text, is_orderable=True) -> list[Term]:
         tokens = []
         position = 0
 
@@ -131,9 +162,9 @@ class ClassicTokenizer:
                         Term(
                             term=part,
                             original_term=part,
-                            position=position,
-                            start_char_offset=start_offset,
-                            end_char_offset=end_offset,
+                            position=position if is_orderable else -1,
+                            start_char_offset=start_offset if is_orderable else -1,
+                            end_char_offset=end_offset if is_orderable else -1,
                         )
                     )
                     position += 1
@@ -144,9 +175,9 @@ class ClassicTokenizer:
                 Term(
                     term=token,
                     original_term=token,
-                    position=position,
-                    start_char_offset=start_offset,
-                    end_char_offset=end_offset,
+                    position=position if is_orderable else -1,
+                    start_char_offset=start_offset if is_orderable else -1,
+                    end_char_offset=end_offset if is_orderable else -1,
                 )
             )
             position += 1
@@ -161,8 +192,18 @@ class ClassicTokenizer:
 
 
 class LinkTokenizer:
+    def __init__(self) -> None:
+        self.tokenizer = ClassicTokenizer()
+
+    def __call__(self, *args, **kwargs):
+        return self.tokenize(*args, **kwargs)
+
     def tokenize(self, text, href=None, alt_text=None):
-        return text
+        tokenized_text = self.tokenizer(text)
+        href = self.tokenizer(href, is_orderable=False) if href else []
+        alt_text = self.tokenizer(alt_text, is_orderable=False) if alt_text else []
+
+        return tokenized_text + href + alt_text
 
 
 class Tokenizer:
@@ -186,7 +227,11 @@ class Tokenizer:
     def tokenize(self, text_block):
         if isinstance(text_block, CodeBlock):
             return self.code_normalizer(self.code_tokenizer(text_block.text))
+        elif isinstance(text_block, LinkBlock):
+            return self.link_normalizer(
+                self.link_tokenizer(
+                    text_block.text, text_block.href, text_block.alt_text
+                )
+            )
         elif isinstance(text_block, TextBlock):
             return self.text_normalizer(self.text_tokenizer(text_block.text))
-        elif isinstance(text_block, LinkBlock):
-            return self.link_normalizer(self.link_tokenizer(text_block.text))
