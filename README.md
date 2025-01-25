@@ -32,7 +32,7 @@ Hopefully the above works for you...
 
 #### Reading the Data
 ```bash
-cd scipts
+cd scripts
 chmod +x read_dump.bash
 ./read_dump.bash <path_to_dump> <database_name>
 ```
