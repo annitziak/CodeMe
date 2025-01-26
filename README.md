@@ -2,6 +2,20 @@
 
 `potential_ideas.md` contains potential project ideas i.e. potential corpora to use and specific features of the system to be included
 
+## Enviornment Setup
+Python v3.10.12 is used in the project. It is unclear if the code will work with other versions of Python.
+The following instructions are for setting up the environment to run the code in this repository.
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+To ensure correct referencing of the modules in the repository, the following command should be run in the root directory of the repository.
+```bash
+pip install -e .
+```
+
 ## Data Collection
 A desciption of the StackOverfow data collection process is in `docs/stack_overflow.md`.
 The scripts `scripts/stack_exchange.py` is used to read the raw XML files and use those to populate a PostgreSQL database.
