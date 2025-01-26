@@ -27,6 +27,7 @@ class IndexBuilder:
         self.db_connection = DBConnection(db_params)
 
         self.index_path = index_path
+        self.doc_metadata = {}
 
         self.batch_size = batch_size
         self.num_shards = num_shards if not debug else DEV_SHARDS
@@ -74,7 +75,7 @@ class IndexBuilder:
 
             for future in concurrent.futures.as_completed(futures):
                 terms = future.result()
-                print(terms)
+
                 with open("index.txt", "w") as file:
                     file.write("")
                 words = sorted(list(terms.keys()))
@@ -82,13 +83,13 @@ class IndexBuilder:
                     doc_no = sorted(list(terms[word].keys()))
                     with open("index.txt", "a") as file:
                         try:
-                            file.write(f"{word}:{len(doc_no)}\n")
+                            file.write(f"{word}\t{len(doc_no)}\n")
                         except Exception:
                             file.write(f"bad_encoding:{len(doc_no)}\n")
                     for no in doc_no:
                         posn_list = str(terms[word][no]).replace(" ", "")[1:-1]
                         with open("index.txt", "a") as file:
-                            file.write(f"\t{str(no)}: {posn_list}\n")
+                            file.write(f"\t{str(no)}\t{posn_list}\n")
 
     def _process_posts_shard(self, shard: int, start: int, end: int, db_params: dict):
         """
@@ -130,7 +131,8 @@ class IndexBuilder:
                     )
                     break
 
-                for post_id, doc_terms in self._process_posts_batch(batch):
+                for post_id, doc_terms, doc_length in self._process_posts_batch(batch):
+                    self.doc_metadata[post_id] = {"length": doc_length}
                     for term, posn_list in doc_terms.items():
                         if term not in term_docs:
                             term_docs[term] = {}
@@ -138,6 +140,9 @@ class IndexBuilder:
                         term_docs[term][post_id] = posn_list
 
         logger.info(f"Processed shard {shard}: {start}-{end} => {len(term_docs)} terms")
+        with open("doc_metadata.txt", "w") as file:
+            for doc_id, metadata in self.doc_metadata.items():
+                file.write(f"{doc_id}: {metadata['length']}\n")
         return term_docs
 
     def _process_posts_batch(self, rows: tuple[list]):
@@ -174,7 +179,7 @@ class IndexBuilder:
 
                     position_offset += block.block_length
 
-            yield post_id, doc_terms
+            yield post_id, doc_terms, position_offset
 
     def _tokenize(self, text: str, field: str = "body"):
         if field == "title":
