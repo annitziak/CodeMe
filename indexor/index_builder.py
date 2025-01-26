@@ -19,8 +19,8 @@ class IndexBuilder:
         self,
         db_params: dict,
         index_path: str,
-        batch_size: int = 1000,
-        num_shards: int = 128,
+        batch_size: int = 67,
+        num_shards: int = 1,
         debug=False,
     ) -> None:
         self.db_params = db_params
@@ -32,7 +32,7 @@ class IndexBuilder:
         self.num_shards = num_shards if not debug else DEV_SHARDS
 
         self.title_preprocessor = Preprocessor(parser_kwargs={"parser_type": "raw"})
-        self.body_preprocessor = Preprocessor(parser_kwargs={"parser_type": "html"})
+        self.body_preprocessor = Preprocessor(parser_kwargs={"parser_type": "raw"})
 
         self.debug = debug
 
@@ -75,6 +75,20 @@ class IndexBuilder:
             for future in concurrent.futures.as_completed(futures):
                 terms = future.result()
                 print(terms)
+                with open("index.txt", "w") as file:
+                    file.write("")
+                words=sorted(list(terms.keys()))
+                for word in words:
+                    doc_no=sorted(list(terms[word].keys()))
+                    with open("index.txt", "a") as file:
+                        try:
+                            file.write(f"{word}:{len(doc_no)}\n")
+                        except Exception as e:
+                            file.write(f"bad_encoding:{len(doc_no)}\n")
+                    for no in doc_no:
+                        posn_list=str(terms[word][no]).replace(" ","")[1:-1]
+                        with open("index.txt", "a") as file:
+                            file.write(f"\t{str(no)}: {posn_list}\n")
 
     def _process_posts_shard(self, shard: int, start: int, end: int, db_params: dict):
         """
@@ -100,7 +114,7 @@ class IndexBuilder:
                 """
                 SELECT id, title, body
                 FROM posts
-                WHERE id >= %s AND id < %s
+                -- WHERE id >= %s AND id < %s
                 """,
                 (start, end),
             )
@@ -117,11 +131,11 @@ class IndexBuilder:
                     break
 
                 for post_id, doc_terms in self._process_posts_batch(batch):
-                    for term, tf in doc_terms.items():
+                    for term, posn_list in doc_terms.items():
                         if term not in term_docs:
                             term_docs[term] = {}
 
-                        term_docs[term][post_id] = tf
+                        term_docs[term][post_id] = posn_list
 
         logger.info(f"Processed shard {shard}: {start}-{end} => {len(term_docs)} terms")
         return term_docs
@@ -140,15 +154,31 @@ class IndexBuilder:
         """
         for row in rows:
             post_id, title, body = row
+            # print(row)
+            # doc_terms = defaultdict(float)
+            print(body)
+            doc_terms={}
 
-            doc_terms = defaultdict(float)
-
-            for field, text in [("title", title), ("body", body)]:
+            for field, text in [("title", str(title)), ("body", body)]:
                 blocks = self._tokenize(text, field=field)
+                print(blocks)
                 for block in blocks:
-                    for term in block:
-                        doc_terms[term.term] += 1.0
-
+                    for posn in range(len(block.words)):
+                        term=block.words[posn]
+                        if term.term not in doc_terms.keys():
+                            doc_terms[term.term] = [posn]
+                        else:
+                            doc_terms[term.term].append(posn)
+            print(post_id,doc_terms,"YEEHAWWWW")
+            # blocks = [self._tokenize(str(title), field="title"),self._tokenize(str(body), field="body")]
+            # print(blocks)
+            # for block in blocks:
+            #     for posn in range(len(block.words)):
+            #         term=block.words[posn]
+            #         if term.term not in doc_terms.keys():
+            #             doc_terms[term.term] = [posn]
+            #         else:
+            #             doc_terms[term.term].append(posn)
             yield post_id, doc_terms
 
     def _tokenize(self, text: str, field: str = "body"):
