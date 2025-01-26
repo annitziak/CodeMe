@@ -21,7 +21,7 @@ def BuildParser(parser_type: str, **kwargs):
     if parser_type == "html":
         return HTMLParserInterface(**kwargs)
     elif parser_type == "raw":
-        return DefaultParserInterface()
+        return DefaultParserInterface(**kwargs)
     else:
         raise ValueError(
             f"Parser type {parser_type} not recognized. Use 'html' or 'raw'"
@@ -41,17 +41,18 @@ class Preprocessor:
             ]
         },
     ):
-        # replace with factory method to build the correct parser
-        self.html_parser = BuildParser(**parser_kwargs)
+        self.parser = BuildParser(**parser_kwargs)
         self.tokenizer = Tokenizer(**tokenizer_kwargs)
 
     def __call__(self, text):
         return self.preprocess(text)
 
     def preprocess(self, text):
-        text_blocks = self.html_parser.parse(text)
+        text_blocks = self.parser.parse(text)
         for text_block in text_blocks:
-            text_block.words = self.tokenizer(text_block)
+            tokenized_out = self.tokenizer(text_block)
+            text_block.words = tokenized_out.tokenized_text
+            text_block.block_length = tokenized_out.original_number_of_words
 
         return text_blocks
 

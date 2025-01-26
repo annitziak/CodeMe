@@ -1,6 +1,7 @@
 import re
 import logging
 
+from dataclasses import dataclass
 from preprocessing import CodeBlock, NormalTextBlock as TextBlock, LinkBlock, Term
 from preprocessing.normalizer import Normalizer
 
@@ -8,6 +9,12 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TokenizedOutput:
+    tokenized_text: list[Term]
+    original_number_of_words: int = 0
 
 
 class CodeTokenizer:
@@ -28,6 +35,7 @@ class CodeTokenizer:
     def tokenize(self, text):
         tokens = []
         buffer = ""
+
         for idx, char in enumerate(text):
             if not char.isspace() and char not in self.symbols:
                 buffer += char
@@ -224,14 +232,33 @@ class Tokenizer:
     def __call__(self, *args, **kwargs):
         return self.tokenize(*args, **kwargs)
 
-    def tokenize(self, text_block):
+    def tokenize(self, text_block) -> TokenizedOutput:
+        if text_block is None:
+            return TokenizedOutput(tokenized_text=[], original_number_of_words=0)
+        if text_block.text is None:
+            return TokenizedOutput(tokenized_text=[], original_number_of_words=0)
+
         if isinstance(text_block, CodeBlock):
-            return self.code_normalizer(self.code_tokenizer(text_block.text))
-        elif isinstance(text_block, LinkBlock):
-            return self.link_normalizer(
-                self.link_tokenizer(
-                    text_block.text, text_block.href, text_block.alt_text
-                )
+            tokenized_out = self.code_tokenizer(text_block.text)
+            return TokenizedOutput(
+                tokenized_text=self.code_normalizer(tokenized_out),
+                original_number_of_words=len(tokenized_out),
             )
+
+        elif isinstance(text_block, LinkBlock):
+            tokenized_out = self.link_tokenizer(
+                text_block.text, text_block.href, text_block.alt_text
+            )
+            return TokenizedOutput(
+                tokenized_text=self.link_normalizer(tokenized_out),
+                original_number_of_words=len(tokenized_out),
+            )
+
         elif isinstance(text_block, TextBlock):
-            return self.text_normalizer(self.text_tokenizer(text_block.text))
+            tokenized_out = self.text_tokenizer(text_block.text)
+            return TokenizedOutput(
+                tokenized_text=self.text_normalizer(tokenized_out),
+                original_number_of_words=len(tokenized_out),
+            )
+        else:
+            raise ValueError(f"Unknown text block type: {type(text_block)}")

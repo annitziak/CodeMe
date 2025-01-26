@@ -11,6 +11,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+DUMMY_ROW_INSERTION_RANGES = {
+    "posthistory": {"postid": [(0, 37000000), (37000000, 42283335)]},
+    "posts": [],
+    "post2": [],
+}
+
 
 class StackExchangeImporter:
     def __init__(self, db_params):
@@ -193,8 +199,25 @@ class StackExchangeImporter:
         logger.info(
             f"Adding dummy rows to {table_name} to satisfy foreign key constraint"
         )
-        insert_query = f"INSERT INTO {table_name} ({column_name}) SELECT DISTINCT {ref_column} FROM {ref_table} WHERE {ref_column} NOT IN (SELECT {column_name} FROM {table_name})"
-        self.db_connection.execute(insert_query, commit=False)
+        column_ranges = DUMMY_ROW_INSERTION_RANGES.get(table_name, {})
+        if len(column_ranges) == 0:
+            logger.info(f"No dummy row ranges found for table {table_name}")
+            exit(-1)
+
+        for start, end in column_ranges.get(column_name, []):
+            insert_query = f"""INSERT INTO {ref_table} ({ref_column})
+                                SELECT DISTINCT {column_name}
+                                FROM {table_name}
+                                WHERE {column_name} >= {start}
+                                    AND {column_name} < {end}
+                                    AND NOT EXISTS (
+                                        SELECT 1 FROM {ref_table}
+                                        WHERE {ref_table}.{ref_column} = {table_name}.{column_name}
+                                    )"""
+            logger.info(
+                f"Inserting dummy rows with statement: '{pprint.pformat(insert_query)}'"
+            )
+            self.db_connection.execute(insert_query, commit=False)
 
     def _is_timestamp(self, value):
         try:

@@ -16,7 +16,7 @@ class DefaultParserInterface:
 
     def parse(self, data: str):
         text_block = NormalTextBlock(text=data, block_id=0, text_size=TextSize.P)
-        self.text_blocks.append(text_block)
+        self.text_blocks = [text_block]
 
         return self.text_blocks
 

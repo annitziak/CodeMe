@@ -1,7 +1,7 @@
 import logging
+import os
 import concurrent.futures
 
-from collections import defaultdict
 
 from preprocessing.preprocessor import Preprocessor
 from utils.db_connection import DBConnection
@@ -19,8 +19,8 @@ class IndexBuilder:
         self,
         db_params: dict,
         index_path: str,
-        batch_size: int = 67,
-        num_shards: int = 1,
+        batch_size: int = 1000,
+        num_shards: int = 128,
         debug=False,
     ) -> None:
         self.db_params = db_params
@@ -32,7 +32,7 @@ class IndexBuilder:
         self.num_shards = num_shards if not debug else DEV_SHARDS
 
         self.title_preprocessor = Preprocessor(parser_kwargs={"parser_type": "raw"})
-        self.body_preprocessor = Preprocessor(parser_kwargs={"parser_type": "raw"})
+        self.body_preprocessor = Preprocessor(parser_kwargs={"parser_type": "html"})
 
         self.debug = debug
 
@@ -59,7 +59,7 @@ class IndexBuilder:
         ]
         logger.info(f"Processing {num_posts} posts in {self.num_shards} shards")
         with concurrent.futures.ProcessPoolExecutor(
-            max_workers=min(2, 8)  # os.cpu_count() - 2
+            max_workers=max(os.cpu_count() - 1, self.num_shards)
         ) as executor:
             futures = [
                 executor.submit(
@@ -77,16 +77,16 @@ class IndexBuilder:
                 print(terms)
                 with open("index.txt", "w") as file:
                     file.write("")
-                words=sorted(list(terms.keys()))
+                words = sorted(list(terms.keys()))
                 for word in words:
-                    doc_no=sorted(list(terms[word].keys()))
+                    doc_no = sorted(list(terms[word].keys()))
                     with open("index.txt", "a") as file:
                         try:
                             file.write(f"{word}:{len(doc_no)}\n")
-                        except Exception as e:
+                        except Exception:
                             file.write(f"bad_encoding:{len(doc_no)}\n")
                     for no in doc_no:
-                        posn_list=str(terms[word][no]).replace(" ","")[1:-1]
+                        posn_list = str(terms[word][no]).replace(" ", "")[1:-1]
                         with open("index.txt", "a") as file:
                             file.write(f"\t{str(no)}: {posn_list}\n")
 
@@ -145,6 +145,8 @@ class IndexBuilder:
         A generator that processes a batch of posts and yields the post ID and document terms for each post
         This is called by _process_posts_shard to process a batch of posts for each shard
 
+        TODO Implement char_offset for blocks (currently only within a single block) perhaps when rebuilding we can use it
+
         Args:
             rows: list of tuples
 
@@ -154,31 +156,24 @@ class IndexBuilder:
         """
         for row in rows:
             post_id, title, body = row
-            # print(row)
-            # doc_terms = defaultdict(float)
-            print(body)
-            doc_terms={}
 
-            for field, text in [("title", str(title)), ("body", body)]:
+            doc_terms = {}
+            position_offset = 0
+
+            for field, text in [("title", title), ("body", body)]:
+                if text is None:
+                    continue
+
                 blocks = self._tokenize(text, field=field)
-                print(blocks)
                 for block in blocks:
-                    for posn in range(len(block.words)):
-                        term=block.words[posn]
-                        if term.term not in doc_terms.keys():
-                            doc_terms[term.term] = [posn]
+                    for word in block.words:
+                        if word.term not in doc_terms.keys():
+                            doc_terms[word.term] = [word.position + position_offset]
                         else:
-                            doc_terms[term.term].append(posn)
-            print(post_id,doc_terms,"YEEHAWWWW")
-            # blocks = [self._tokenize(str(title), field="title"),self._tokenize(str(body), field="body")]
-            # print(blocks)
-            # for block in blocks:
-            #     for posn in range(len(block.words)):
-            #         term=block.words[posn]
-            #         if term.term not in doc_terms.keys():
-            #             doc_terms[term.term] = [posn]
-            #         else:
-            #             doc_terms[term.term].append(posn)
+                            doc_terms[word.term].append(word.position + position_offset)
+
+                    position_offset += block.block_length
+
             yield post_id, doc_terms
 
     def _tokenize(self, text: str, field: str = "body"):
@@ -218,10 +213,20 @@ if __name__ == "__main__":
 
     from constants import DB_PARAMS
 
+    DB_PARAMS["database"] = "stack_overflow_small"
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--index_path", type=str, default=".cache/index")
+    parser.add_argument("--index-path", type=str, default=".cache/index")
+    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--num-shards", type=int, default=24)
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
-    builder = IndexBuilder(DB_PARAMS, args.index_path, debug=args.debug)
+    builder = IndexBuilder(
+        DB_PARAMS,
+        args.index_path,
+        debug=args.debug,
+        batch_size=args.batch_size,
+        num_shards=args.num_shards,
+    )
     builder.process_posts()
