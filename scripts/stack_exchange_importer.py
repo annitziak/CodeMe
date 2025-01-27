@@ -199,25 +199,18 @@ class StackExchangeImporter:
         logger.info(
             f"Adding dummy rows to {table_name} to satisfy foreign key constraint"
         )
-        column_ranges = DUMMY_ROW_INSERTION_RANGES.get(table_name, {})
-        if len(column_ranges) == 0:
-            logger.info(f"No dummy row ranges found for table {table_name}")
-            exit(-1)
 
-        for start, end in column_ranges.get(column_name, []):
-            insert_query = f"""INSERT INTO {ref_table} ({ref_column})
-                                SELECT DISTINCT {column_name}
-                                FROM {table_name}
-                                WHERE {column_name} >= {start}
-                                    AND {column_name} < {end}
-                                    AND NOT EXISTS (
-                                        SELECT 1 FROM {ref_table}
-                                        WHERE {ref_table}.{ref_column} = {table_name}.{column_name}
-                                    )"""
-            logger.info(
-                f"Inserting dummy rows with statement: '{pprint.pformat(insert_query)}'"
-            )
-            self.db_connection.execute(insert_query, commit=False)
+        insert_query = f"""INSERT INTO {ref_table} ({ref_column})
+                            SELECT DISTINCT {column_name}
+                            FROM {table_name}
+                            LEFT JOIN {ref_table} ON {ref_table}.{ref_column} = {table_name}.{column_name}
+                            WHERE {table_name}.{column_name} IS NOT NULL
+                                    AND {ref_table}.{ref_column} IS NULL;
+                        """
+        logger.info(
+            f"Inserting dummy rows with statement: '{pprint.pformat(insert_query)}'"
+        )
+        self.db_connection.execute(insert_query, commit=False)
 
     def _is_timestamp(self, value):
         try:
@@ -313,6 +306,10 @@ class StackExchangeImporter:
 
 if __name__ == "__main__":
     import os
+    import dotenv
+    import argparse
+
+    dotenv.load_dotenv()
 
     db_params = {
         "dbname": os.getenv("POSTGRES_DB"),
@@ -320,9 +317,6 @@ if __name__ == "__main__":
     }
 
     importer = StackExchangeImporter(db_params)
-
-    import argparse
-    import os
 
     parser = argparse.ArgumentParser(
         description="Utility script to read Stack Exchange XML files and import them into a PostgreSQL database"
@@ -360,23 +354,23 @@ if __name__ == "__main__":
     importer.add_primary_key("tags", "Id")
     importer.add_primary_key("postlinks", "Id")
 
-    importer.add_foreign_key("posthistory", "postId", "post2", "Id")
-    importer.add_foreign_key("posthistory", "userId", "users", "Id")
-
     importer.add_foreign_key("post2", "owneruserId", "users", "Id")
     importer.add_foreign_key("post2", "lasteditoruserId", "users", "Id")
 
     importer.add_foreign_key("comments", "userId", "users", "Id")
     importer.add_foreign_key("comments", "postId", "post2", "Id")
 
+    importer.add_foreign_key("postlinks", "postId", "post2", "Id")
+    importer.add_foreign_key("postlinks", "relatedpostId", "post2", "Id")
+
     importer.add_foreign_key("votes", "postId", "post2", "Id")
 
     importer.add_foreign_key("badges", "userId", "users", "Id")
 
-    importer.add_foreign_key("postlinks", "postId", "post2", "Id")
-    importer.add_foreign_key("postlinks", "relatedpostId", "post2", "Id")
-
     importer.add_foreign_key("tags", "excerptpostId", "post2", "Id")
+
+    importer.add_foreign_key("posthistory", "postId", "post2", "Id")
+    importer.add_foreign_key("posthistory", "userId", "users", "Id")
 
     importer.add_required_column("post2", "ParentId")
 
