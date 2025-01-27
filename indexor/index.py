@@ -38,11 +38,14 @@ class Index(IndexBase):
     def get_posting_list(self, term: str, doc_id: int) -> PostingList | None:
         return self.index.get_posting_list(term, doc_id)
 
-    def __and__(self, other):
-        return self.index & other.index
+    def get_intersection(self, terms: list[str]) -> list[int]:
+        return self.index.get_intersection(terms)
 
-    def __or__(self, other):
-        return self.index | other.index
+    def get_union(self, terms: list[str]) -> list[int]:
+        return self.index.get_union(terms)
+
+    def get_complement(self, term: str) -> list[int]:
+        return self.index.get_complement(term)
 
 
 if __name__ == "__main__":
@@ -53,6 +56,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     index = Index(load_path=args.index_path)
+
+    term_obj = index.get_union(["hello", "python"])
+    print(term_obj)
+
+    term_obj = index.get_intersection(["hello", "python"])
+    print(term_obj)
 
     while True:
         term = input("Enter a term to look up (Press q to quit): ")
