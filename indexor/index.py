@@ -11,9 +11,14 @@ logger = logging.getLogger(__name__)
 
 
 class Index(IndexBase):
-    def __init__(self, load_path=None, index_builder_kwargs: dict = {}):
+    def __init__(
+        self, load_path=None, use_disk_index=True, index_builder_kwargs: dict = {}
+    ):
         self.load_path = load_path
-        self.index = build_index(self.load_path, **index_builder_kwargs)
+        self.use_disk_index = use_disk_index
+        self.index = build_index(
+            self.load_path, self.use_disk_index, **index_builder_kwargs
+        )
 
     def __getitem__(self, term: str) -> Term:
         return self.get_term(term)
