@@ -7,7 +7,9 @@ import heapq
 import marisa_trie
 
 from dataclasses import dataclass
-from indexor.structures import Term, PostingList
+
+from indexor.structures import Term, PostingList, SIZE_KEY, READ_SIZE_KEY
+
 from preprocessing.preprocessor import Preprocessor
 from utils.db_connection import DBConnection
 
@@ -72,6 +74,17 @@ class DocumentShardedIndexBuilder:
 
     def flush(self, shard: int = -1):
         """
+        By default, flushes both a non-positional and positional index to disk.
+        """
+        self._flush_shard(shard, shard_filename="shard", flush_positions=False)
+        self._flush_shard(shard, shard_filename="pos_shard", flush_positions=True)
+
+        self.term_map = {}
+
+    def _flush_shard(
+        self, shard: int = -1, shard_filename="shard", flush_positions=False
+    ):
+        """
         Flush the current term map to disk.
         Saves the term map to a file in the index directory.
 
@@ -91,7 +104,7 @@ class DocumentShardedIndexBuilder:
 
         logger.info(f"Flushing shard {shard} with {len(self.term_map)} terms")
 
-        shard_path = os.path.join(self.index_path, f"shard_{shard}.index")
+        shard_path = os.path.join(self.index_path, f"{shard_filename}_{shard}.index")
         offset_dict = {}
 
         with open(shard_path, "wb") as f:
@@ -99,36 +112,44 @@ class DocumentShardedIndexBuilder:
                 # term_obj.sort_posting_lists()
 
                 offset_dict[term] = f.tell()
-                f.write(struct.pack("<I", term_obj.document_frequency))
-
-                if term == "python":
-                    print(term_obj)
+                f.write(
+                    struct.pack(SIZE_KEY["postings_count"], term_obj.document_frequency)
+                )
 
                 prev_doc_id = 0
                 for posting in term_obj.posting_lists.values():
                     delta = posting.doc_id - prev_doc_id
 
-                    assert delta < 2**32, f"Delta too large: {delta}"
-                    assert (
-                        posting.doc_term_frequency < 2**16
-                    ), f"Doc term frequency too large: {posting.doc_term_frequency}"
-
-                    f.write(struct.pack("<IH", delta, posting.doc_term_frequency))
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["deltaTF"], delta, posting.doc_term_frequency
+                        )
+                    )
                     prev_doc_id = posting.doc_id
 
-        offset_path = os.path.join(self.index_path, f"shard_{shard}.offset")
+                    if flush_positions:
+                        filter_positions = [p for p in posting.positions if p >= 0]
+                        filter_positions = sorted(filter_positions)
+                        f.write(
+                            struct.pack(
+                                SIZE_KEY["position_count"], len(filter_positions)
+                            )
+                        )
+
+                        prev_position = 0
+                        for position in filter_positions:
+                            delta = position - prev_position
+                            f.write(struct.pack(SIZE_KEY["position_delta"], delta))
+                            prev_position = position
+
+        offset_path = os.path.join(self.index_path, f"{shard_filename}_{shard}.offset")
         with open(offset_path, "wb") as offset_f:
             for term, offset in offset_dict.items():
                 term_bytes = term.encode("utf-8")
 
-                assert len(term_bytes) < 2**32, f"Term too large: {term}"
-                assert offset < 2**64, f"Offset too large: {offset}"
-
-                offset_f.write(struct.pack("<I", len(term_bytes)))
+                offset_f.write(struct.pack(SIZE_KEY["term_bytes"], len(term_bytes)))
                 offset_f.write(term_bytes)
-                offset_f.write(struct.pack("<Q", offset))
-
-        self.term_map = {}
+                offset_f.write(struct.pack(SIZE_KEY["offset"], offset))
 
 
 class ShardReader:
@@ -141,26 +162,55 @@ class ShardReader:
 
     def next_term(self):
         try:
-            term_length = struct.unpack("<I", self.f_offset.read(4))[0]
+            term_length = struct.unpack(
+                SIZE_KEY["term_bytes"],
+                self.f_offset.read(READ_SIZE_KEY[SIZE_KEY["term_bytes"]]),
+            )[0]
             term = self.f_offset.read(term_length).decode("utf-8")
-            offset = struct.unpack("<Q", self.f_offset.read(8))[0]
+            offset = struct.unpack(
+                SIZE_KEY["offset"],
+                self.f_offset.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
+            )[0]
             return term, offset
         except struct.error:
             return None, None
 
-    def read_postings(self, offset: int) -> list[PostingList]:
+    def read_postings(self, offset: int, read_positions=False) -> list[PostingList]:
         self.f_shard.seek(offset)
 
-        count = struct.unpack("<I", self.f_shard.read(4))[0]
+        count = struct.unpack(
+            SIZE_KEY["postings_count"],
+            self.f_shard.read(READ_SIZE_KEY[SIZE_KEY["postings_count"]]),
+        )[0]
         postings = []
         curr_doc_id = 0
 
         for _ in range(count):
             doc_id_delta, doc_term_frequency = struct.unpack(
-                "<IH", self.f_shard.read(6)
+                SIZE_KEY["deltaTF"],
+                self.f_shard.read(READ_SIZE_KEY[SIZE_KEY["deltaTF"]]),
             )
             curr_doc_id += doc_id_delta
-            postings.append(PostingList(curr_doc_id, doc_term_frequency, []))
+
+            positions = []
+            if read_positions:
+                curr_position = 0
+                position_count = struct.unpack(
+                    SIZE_KEY["position_count"],
+                    self.f_shard.read(READ_SIZE_KEY[SIZE_KEY["position_count"]]),
+                )[0]
+                print("Position Count", position_count)
+                for _ in range(position_count):
+                    position_delta = struct.unpack(
+                        SIZE_KEY["position_delta"],
+                        self.f_shard.read(READ_SIZE_KEY[SIZE_KEY["position_delta"]]),
+                    )[0]
+                    curr_position += position_delta
+                    positions.append(curr_position)
+
+            postings.append(
+                PostingList(curr_doc_id, doc_term_frequency, sorted(positions))
+            )
 
         return postings
 
@@ -190,11 +240,29 @@ class IndexMerger:
         self.output_dir = index_path if output_dir == "" else output_dir
 
     def merge(self):
-        shard_files = glob.glob(os.path.join(self.index_path, "shard_*.index"))
-        offset_files = glob.glob(os.path.join(self.index_path, "shard_*.offset"))
+        self._merge(
+            shard_filename="shard", save_filename="postings", merge_positions=False
+        )
+        self._merge(
+            shard_filename="pos_shard", save_filename="positions", merge_positions=True
+        )
 
-        postings_file = os.path.join(self.output_dir, "postings.bin")
+    def _merge(
+        self, shard_filename="shard", save_filename="postings", merge_positions=False
+    ):
+        shard_files = glob.glob(
+            os.path.join(self.index_path, f"{shard_filename}_*.index")
+        )
+        offset_files = glob.glob(
+            os.path.join(self.index_path, f"{shard_filename}_*.offset")
+        )
+
+        postings_file = os.path.join(self.output_dir, f"{save_filename}.bin")
         term_offsets = {}
+
+        logger.info(
+            f"Merging files {shard_files} and {offset_files}. Saving to {postings_file} ..."
+        )
 
         with open(postings_file, "wb") as f:
             heap = []
@@ -210,40 +278,101 @@ class IndexMerger:
                 term, offset, reader = heapq.heappop(heap)
                 term_offsets[term] = f.tell()
 
-                all_postings = reader.read_postings(offset)
+                all_postings = reader.read_postings(
+                    offset, read_positions=merge_positions
+                )
                 while heap and heap[0].term == term:
                     _, offset, other_reader = heapq.heappop(heap)
-                    all_postings.extend(other_reader.read_postings(offset))
+                    all_postings.extend(
+                        other_reader.read_postings(
+                            offset, read_positions=merge_positions
+                        )
+                    )
 
                     next_term, next_offset = other_reader.next_term()
                     if next_term is not None and next_offset is not None:
                         heapq.heappush(heap, HeapItem(next_term, offset, other_reader))
 
-                all_postings.sort(key=lambda x: x.doc_id)
-                self._write_merged_postings(f, all_postings)
+                # all_postings.sort(key=lambda x: x.doc_id)
+                self._write_merged_postings(
+                    f, all_postings, merge_positions=merge_positions
+                )
 
                 next_term, next_offset = reader.next_term()
                 if next_term is not None and next_offset is not None:
                     heapq.heappush(heap, HeapItem(next_term, next_offset, reader))
 
-        self._build_term_fst(term_offsets)
+        self._build_term_fst(
+            term_offsets, save_filename="pos_terms" if merge_positions else "terms"
+        )
 
-    def _build_term_fst(self, term_offsets):
+    def _build_term_fst(self, term_offsets, save_filename="terms"):
         items = []
         for term, offset in term_offsets.items():
             value = struct.pack("<Q", offset)
             items.append((term, value))
 
         fst = marisa_trie.BytesTrie(items)
-        fst.save(os.path.join(self.output_dir, "terms.fst"))
+        fst.save(os.path.join(self.output_dir, f"{save_filename}.fst"))
 
-    def _write_merged_postings(self, f, postings):
-        f.write(struct.pack("<I", len(postings)))
+    def _write_merged_postings(self, f, postings, merge_positions=False):
+        f.write(struct.pack(SIZE_KEY["postings_count"], len(postings)))
         prev_doc_id = 0
         for posting in postings:
             delta = posting.doc_id - prev_doc_id
-            f.write(struct.pack("<IH", delta, posting.doc_term_frequency))
+            f.write(struct.pack(SIZE_KEY["deltaTF"], delta, posting.doc_term_frequency))
             prev_doc_id = posting.doc_id
+
+            if merge_positions:
+                prev_position = 0
+                filter_positions = [p for p in posting.positions if p >= 0]
+                f.write(struct.pack(SIZE_KEY["position_count"], len(filter_positions)))
+                for position in filter_positions:
+                    delta = position - prev_position
+                    f.write(struct.pack(SIZE_KEY["position_delta"], delta))
+                    prev_position = position
+
+    def write_index(self, f):
+        logger.info("Writing index to file")
+
+        postings_file = os.path.join(self.output_dir, "positions.bin")
+        term_fst = marisa_trie.BytesTrie()
+        term_fst.load(os.path.join(self.output_dir, "pos_terms.fst"))
+
+        with open(postings_file, "rb") as pf:
+            for term, value in term_fst.items():
+                curr_doc_id = 0
+                offset = struct.unpack(SIZE_KEY["offset"], value)[0]
+                pf.seek(offset)
+                posting_count = struct.unpack(
+                    SIZE_KEY["postings_count"],
+                    pf.read(READ_SIZE_KEY[SIZE_KEY["postings_count"]]),
+                )[0]
+
+                f.write(f"{term}\t{posting_count}\n")
+
+                for _ in range(posting_count):
+                    delta, _ = struct.unpack(
+                        SIZE_KEY["deltaTF"], pf.read(READ_SIZE_KEY[SIZE_KEY["deltaTF"]])
+                    )
+                    curr_doc_id += delta
+
+                    positions = []
+                    position_count = struct.unpack(
+                        SIZE_KEY["position_count"],
+                        pf.read(READ_SIZE_KEY[SIZE_KEY["position_count"]]),
+                    )[0]
+                    curr_position = 0
+                    for _ in range(position_count):
+                        delta = struct.unpack(
+                            SIZE_KEY["position_delta"],
+                            pf.read(READ_SIZE_KEY[SIZE_KEY["position_delta"]]),
+                        )[0]
+                        curr_position += delta
+                        positions.append(str(curr_position))
+
+                    positions = ",".join(positions)
+                    f.write(f"\t{curr_doc_id}\t{positions}\n")
 
 
 class IndexBuilder:
@@ -253,6 +382,7 @@ class IndexBuilder:
         index_path: str,
         batch_size: int = 1000,
         num_shards: int = 24,
+        write_txt: bool = False,
         debug=False,
     ) -> None:
         self.db_params = db_params
@@ -273,6 +403,8 @@ class IndexBuilder:
 
         self.debug = debug
 
+        self.write_txt = write_txt
+
     def __getstate__(self):
         state = self.__dict__.copy()
         del state["db_connection"]
@@ -281,6 +413,20 @@ class IndexBuilder:
     def __setstate__(self, state):
         self.__dict__.update(state)
         self.db_connection = DBConnection(state["db_params"])
+
+    def _init_write_file(self):
+        if not self.write_txt:
+            return
+
+        with open(os.path.join(self.index_path, "index.txt"), "w"):
+            pass
+
+    def _append_index_file(self):
+        if not self.write_txt:
+            return
+
+        with open(os.path.join(self.index_path, "index.txt"), "a") as f:
+            self.index_merger.write_index(f)
 
     def process_posts(self):
         with self.db_connection as conn:
@@ -313,6 +459,7 @@ class IndexBuilder:
                 _ = future.result()
 
         self.index_merger.merge()
+        self._append_index_file()
 
     def _process_posts_shard(self, shard: int, start: int, end: int, db_params: dict):
         """
@@ -444,6 +591,7 @@ if __name__ == "__main__":
     parser.add_argument("--index-path", type=str, default=".cache/index")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-shards", type=int, default=24)
+    parser.add_argument("--write-debug-index", action="store_true")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
@@ -453,10 +601,11 @@ if __name__ == "__main__":
         debug=args.debug,
         batch_size=args.batch_size,
         num_shards=args.num_shards,
+        write_txt=args.write_debug_index,
     )
     builder.process_posts()
 
     index = Index(load_path=args.index_path)
-    print(index["python"])
-    print(index["java"])
-    print(index["javascript"])
+    print(index.get_term("python", positions=True))
+    print(index.get_term("java", positions=True))
+    print(index.get_term("javascript", positions=True))

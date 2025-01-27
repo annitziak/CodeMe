@@ -1,8 +1,27 @@
 import pprint
+import copy
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from collections import OrderedDict
+
+SIZE_KEY = {
+    "offset": "<Q",
+    "postings_count": "<I",
+    "deltaTF": "<IH",
+    "position_count": "<I",
+    "position_delta": "<I",
+    "df": "<I",
+    "tf": "<H",
+    "term_bytes": "<I",
+}
+
+READ_SIZE_KEY = {
+    "<Q": 8,
+    "<I": 4,
+    "<H": 2,
+    "<IH": 6,
+}
 
 
 @dataclass
@@ -12,10 +31,12 @@ class PostingList:
     positions: list[int]
 
     def __str__(self):
-        return f"{self.doc_id}:{self.doc_term_frequency}"
+        positions = self.positions[:10] if len(self.positions) > 0 else ["."]
+        positions[-1] = "..." if len(self.positions) > 10 else positions[-1]
+        return f"{self.doc_id}:{self.doc_term_frequency}=>{positions}"
 
     def __repr__(self):
-        return f"{self.doc_id}:{self.doc_term_frequency}"
+        return self.__str__()
 
     def sort(self):
         self.positions.sort()
@@ -46,6 +67,37 @@ class Term:
 
     def __repr__(self):
         return f"{self.document_frequency}"
+
+    def __and__(self, other):
+        return_term = Term(f"{self.term} AND {other.term}", 0, OrderedDict())
+        for doc_id, posting_list in self.posting_lists.items():
+            if doc_id in other.posting_lists:
+                posting_list = copy.deepcopy(posting_list)
+                posting_list.positions = []
+                posting_list.doc_term_frequency = 0
+                return_term.posting_lists[doc_id] = posting_list
+
+        return return_term
+
+    def __or__(self, other):
+        return_term = Term(f"{self.term} OR {other.term}", 0, OrderedDict())
+        for doc_id, posting_list in self.posting_lists.items():
+            posting_list = copy.deepcopy(posting_list)
+            posting_list.positions = []
+            posting_list.doc_term_frequency = 0
+            return_term.posting_lists[doc_id] = posting_list
+
+        for doc_id, posting_list in other.posting_lists.items():
+            if doc_id not in return_term.posting_lists:
+                posting_list = copy.deepcopy(posting_list)
+                posting_list.positions = []
+                posting_list.doc_term_frequency = 0
+                return_term.posting_lists[doc_id] = posting_list
+
+        return return_term
+
+    def __not__(self):
+        raise NotImplementedError("NOT operator is not supported")
 
     def sort_posting_lists(self):
         for posting_list in self.posting_lists.values():

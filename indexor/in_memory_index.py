@@ -20,7 +20,7 @@ class InMemoryIndex(IndexBase):
     def __getitem__(self, term: str) -> Term:
         return self.get_term(term)
 
-    def get_term(self, term: str) -> Term:
+    def get_term(self, term: str, positions=False) -> Term:
         term_dict = self.term_map.get(term, None)
         if term_dict is None:
             raise ValueError(f"Term {term} not found in index")

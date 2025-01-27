@@ -18,8 +18,8 @@ class Index(IndexBase):
     def __getitem__(self, term: str) -> Term:
         return self.get_term(term)
 
-    def get_term(self, term: str) -> Term:
-        return self.index.get_term(term)
+    def get_term(self, term: str, positions=False) -> Term:
+        return self.index.get_term(term, positions=positions)
 
     def get_document_frequency(self, term: str) -> int:
         return self.index.get_document_frequency(term)
@@ -32,6 +32,12 @@ class Index(IndexBase):
 
     def get_posting_list(self, term: str, doc_id: int) -> PostingList | None:
         return self.index.get_posting_list(term, doc_id)
+
+    def __and__(self, other):
+        return self.index & other.index
+
+    def __or__(self, other):
+        return self.index | other.index
 
 
 if __name__ == "__main__":
@@ -46,7 +52,7 @@ if __name__ == "__main__":
     while True:
         term = input("Enter a term to look up (Press q to quit): ")
         try:
-            term_obj = index.get_term(term)
+            term_obj = index.get_term(term, positions=True)
             print(term_obj)
         except ValueError as e:
             logger.error(e)
