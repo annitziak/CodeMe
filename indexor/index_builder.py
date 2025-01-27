@@ -102,10 +102,12 @@ class DocumentShardedIndexBuilder:
         shard = self.curr_shard if shard == -1 else shard
         shard = self.shard if self.shard != -1 else shard
 
-        logger.info(f"Flushing shard {shard} with {len(self.term_map)} terms")
-
         shard_path = os.path.join(self.index_path, f"{shard_filename}_{shard}.index")
         offset_dict = {}
+
+        logger.info(
+            f"Flushing shard {shard} with {len(self.term_map)} terms to {shard_path}"
+        )
 
         with open(shard_path, "wb") as f:
             for term, term_obj in self.term_map.items():
@@ -143,6 +145,8 @@ class DocumentShardedIndexBuilder:
                             prev_position = position
 
         offset_path = os.path.join(self.index_path, f"{shard_filename}_{shard}.offset")
+        logger.info(f"Flushing offset for shard {shard} with filename {offset_path}")
+
         with open(offset_path, "wb") as offset_f:
             for term, offset in offset_dict.items():
                 term_bytes = term.encode("utf-8")
@@ -199,7 +203,6 @@ class ShardReader:
                     SIZE_KEY["position_count"],
                     self.f_shard.read(READ_SIZE_KEY[SIZE_KEY["position_count"]]),
                 )[0]
-                print("Position Count", position_count)
                 for _ in range(position_count):
                     position_delta = struct.unpack(
                         SIZE_KEY["position_delta"],
@@ -239,6 +242,13 @@ class IndexMerger:
         self.index_path = os.path.abspath(index_path)
         self.output_dir = index_path if output_dir == "" else output_dir
 
+        if os.path.exists(self.output_dir):
+            logger.info(f"Removing existing index directory: {self.output_dir}")
+            for f in os.listdir(self.output_dir):
+                if "shard" in f:
+                    logger.info(f"Removing {f}")
+                    os.remove(os.path.join(self.output_dir, f))
+
     def merge(self):
         self._merge(
             shard_filename="shard", save_filename="postings", merge_positions=False
@@ -255,6 +265,13 @@ class IndexMerger:
         )
         offset_files = glob.glob(
             os.path.join(self.index_path, f"{shard_filename}_*.offset")
+        )
+
+        shard_files = sorted(
+            shard_files, key=lambda x: int(x.split("_")[-1].split(".")[0])
+        )
+        offset_files = sorted(
+            offset_files, key=lambda x: int(x.split("_")[-1].split(".")[0])
         )
 
         postings_file = os.path.join(self.output_dir, f"{save_filename}.bin")
@@ -293,7 +310,7 @@ class IndexMerger:
                     if next_term is not None and next_offset is not None:
                         heapq.heappush(heap, HeapItem(next_term, offset, other_reader))
 
-                # all_postings.sort(key=lambda x: x.doc_id)
+                all_postings.sort(key=lambda x: x.doc_id)
                 self._write_merged_postings(
                     f, all_postings, merge_positions=merge_positions
                 )
@@ -307,6 +324,8 @@ class IndexMerger:
         )
 
     def _build_term_fst(self, term_offsets, save_filename="terms"):
+        logger.info(f"Building FST for {len(term_offsets)} terms")
+
         items = []
         for term, offset in term_offsets.items():
             value = struct.pack("<Q", offset)
@@ -320,7 +339,16 @@ class IndexMerger:
         prev_doc_id = 0
         for posting in postings:
             delta = posting.doc_id - prev_doc_id
-            f.write(struct.pack(SIZE_KEY["deltaTF"], delta, posting.doc_term_frequency))
+            try:
+                f.write(
+                    struct.pack(SIZE_KEY["deltaTF"], delta, posting.doc_term_frequency)
+                )
+            except struct.error:
+                print(posting.doc_id, prev_doc_id)
+                print(posting.doc_term_frequency)
+                print(delta)
+                raise
+
             prev_doc_id = posting.doc_id
 
             if merge_positions:
@@ -382,6 +410,7 @@ class IndexBuilder:
         index_path: str,
         batch_size: int = 1000,
         num_shards: int = 24,
+        num_workers: int = 24,
         write_txt: bool = False,
         debug=False,
     ) -> None:
@@ -392,9 +421,8 @@ class IndexBuilder:
         self.doc_metadata = {}
 
         self.batch_size = batch_size
-        self.num_shards = (
-            min(num_shards, os.cpu_count() - 1) if not debug else DEV_SHARDS
-        )
+        self.num_shards = num_shards if not debug else DEV_SHARDS
+        self.num_workers = min(min(num_workers, os.cpu_count() - 1), self.num_shards)
 
         self.title_preprocessor = Preprocessor(parser_kwargs={"parser_type": "raw"})
         self.body_preprocessor = Preprocessor(parser_kwargs={"parser_type": "html"})
@@ -436,13 +464,15 @@ class IndexBuilder:
             )
             max_id = max_id if not self.debug else min_id + 1000
 
-        chunk_size = (max_id - min_id) // self.num_shards
-        partitions = [
-            (i * chunk_size, (i + 1) * chunk_size) for i in range(self.num_shards)
-        ]
+            partitions = self._calculate_partitions(min_id, max_id, num_posts, conn)
+
+        assert (
+            partitions[-1][1] == max_id and partitions[0][0] == min_id
+        ), f"{partitions[0]}!={min_id} or {partitions[-1]}!={max_id}"
+
         logger.info(f"Processing {num_posts} posts in {self.num_shards} shards")
         with concurrent.futures.ProcessPoolExecutor(
-            max_workers=self.num_shards
+            max_workers=self.num_workers
         ) as executor:
             futures = [
                 executor.submit(
@@ -480,31 +510,37 @@ class IndexBuilder:
         index_builder = DocumentShardedIndexBuilder(self.index_path, shard)
 
         proc_conn = DBConnection(db_params)
+        min_id = float("inf")
+        max_id = float("-inf")
         with proc_conn as conn:
-            cur = conn.get_cursor(name="index_builder")
+            cur = conn.get_cursor(name=f"index_builder_{shard}")
             # include tags???
-            cur.execute(
-                """
-                SELECT id, title, body
-                FROM posts
-                -- WHERE id >= %s AND id < %s
-                """,
-                (start, end),
+            select_query = (
+                f"SELECT id, title, body FROM posts WHERE id >= {start} AND id <= {end}"
             )
-            logger.info("Processing shard %d: %d-%d", shard, start, end)
-
-            term_docs = {}
-            doc_metadata = {}
+            cur.execute(select_query)
+            logger.info(
+                "Processing shard %d: %d-%d with query %s",
+                shard,
+                start,
+                end,
+                select_query,
+            )
 
             while True:
                 batch = cur.fetchmany(self.batch_size)
                 if not batch:
                     logger.info(
-                        f"Finished processing shard {shard} with {len(term_docs)} terms"
+                        f"Finished processing shard {shard} with {str(index_builder)} and min_id={min_id}, max_id={max_id}"
                     )
                     break
 
                 for post_id, doc_terms, doc_length in self._process_posts_batch(batch):
+                    if post_id < min_id:
+                        min_id = post_id
+                    if post_id > max_id:
+                        max_id = post_id
+
                     index_builder.add_document(post_id, doc_terms, doc_length)
 
         logger.info(f"Processed shard {shard}: {start}-{end} => {str(index_builder)}")
@@ -577,6 +613,29 @@ class IndexBuilder:
         num_posts = conn.cur.fetchone()[0]
 
         return min_id, max_id, num_posts
+
+    def _calculate_partitions(self, min_id: int, max_id: int, num_rows: int, conn=None):
+        rows_per_shard = num_rows // self.num_shards
+
+        if conn is None:
+            return []
+
+        partition_query = f"""
+            WITH rows AS (
+                SELECT id, ROW_NUMBER() OVER (ORDER BY id) as row_num
+                FROM posts
+            )
+            SELECT MIN(id) as shard_start, MAX(id) as shard_end
+            FROM (
+                SELECT id, SUM(CASE WHEN row_num % {rows_per_shard} = 1 THEN 1 ELSE 0 END) OVER (ORDER BY id) as shard_num
+                FROM rows
+            ) as t
+            GROUP BY shard_num
+            ORDER BY shard_num
+        """
+
+        conn.execute(partition_query)
+        return conn.fetchall()
 
 
 if __name__ == "__main__":

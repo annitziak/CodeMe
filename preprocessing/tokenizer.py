@@ -27,7 +27,7 @@ class CodeTokenizer:
         self.literal_re = re.compile(
             r'(\d+|".*?|\'.*?\'|True|False|true|false|null|None|NaN|Inf)'
         )
-        self.symbols = set("+-*/=()[]{}<>:;,.!@#$%^&|~`")
+        self.symbols = set('+-*/=()[]{}<>:;,.!@#$%^&|~`"')
 
     def __call__(self, *args, **kwargs):
         return self.tokenize(*args, **kwargs)

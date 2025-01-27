@@ -7,6 +7,28 @@ from indexor.structures import READ_SIZE_KEY, Term, PostingList, IndexBase, SIZE
 
 
 class OnDiskIndex(IndexBase):
+    """
+    Stores the index on disk as a memory-mapped file.
+    The index is stored in a trie, and the postings are stored in a memory-mapped file.
+    The trie provides an offset to the postings in the memory-mapped file.
+
+    Trie:
+    - terms.fst: Trie of terms
+    - pos_terms.fst: Trie of terms with positions
+
+    Postings:
+    - postings.bin: Postings lists
+        - Begins with number of postings
+        - Each posting list is stored as a sequence of (delta, term_frequency) pairs
+
+    Positions:
+    - positions.bin: Positions of terms in documents
+         - Begins with number of postings
+         - Each posting list then stores the sequence (delta, term_frequency and position count)
+            - Followed by `position_count` number of position deltas
+
+    """
+
     def __init__(self, load_path=None, index_builder_kwargs: dict = {}):
         self.load_path = load_path
         assert self.load_path is not None, "load_path must be provided"
