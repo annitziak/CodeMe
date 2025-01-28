@@ -33,6 +33,7 @@ class CodeTokenizer:
         return self.tokenize(*args, **kwargs)
 
     def tokenize(self, text):
+        # rust_lib.tokenize_code()
         tokens = []
         buffer = ""
 
@@ -81,18 +82,18 @@ class CodeTokenizer:
 
     def _add_identifier(self, buffer, tokens, idx):
         encoded = self._encode(buffer)
-        curr_end = idx
-        for token in encoded[::-1]:
+        curr_start = idx - len(buffer)
+        for token in encoded:
             tokens.append(
                 Term(
                     term=token,
                     original_term=buffer,
                     position=len(tokens),
-                    start_char_offset=curr_end - len(token),
-                    end_char_offset=curr_end,
+                    start_char_offset=curr_start,
+                    end_char_offset=curr_start + len(token),
                 )
             )
-            curr_end -= len(token)
+            curr_start += len(token)
 
     def _encode(self, text):
         return text.split(" ")

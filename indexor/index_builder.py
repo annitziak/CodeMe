@@ -5,6 +5,7 @@ import struct
 import glob
 import heapq
 import marisa_trie
+import time
 
 from dataclasses import dataclass
 
@@ -22,7 +23,7 @@ DEV_SHARDS = 1
 
 
 class DocumentShardedIndexBuilder:
-    def __init__(self, index_path: str, shard: int = -1, shard_size: int = 1_000_000):
+    def __init__(self, index_path: str, shard: int = -1, shard_size: int = 50_000):
         """
         Used to generate a sharded index where each shard is a separate index file for a subset of the documents.
         If `shard` is -1, then DocumentShardedIndexBuilder will generate shards based on the `shard_size`.
@@ -35,9 +36,11 @@ class DocumentShardedIndexBuilder:
         self.shard_size = shard_size
         self.term_map: dict[str, Term] = {}
 
-        self.doc_length_map: dict[int, int] = {}
-
         self.current_docs = 0
+
+        self.min_doc_id = float("inf")
+        self.max_doc_id = float("-inf")
+        self.start = time.time()
 
         if not os.path.exists(self.index_path):
             logger.info(f"Creating index directory: {self.index_path}")
@@ -57,32 +60,46 @@ class DocumentShardedIndexBuilder:
             doc_terms: dict
             doc_length: int
         """
-        self.doc_length_map[doc_id] = doc_length
+        if doc_id < self.min_doc_id:
+            self.min_doc_id = doc_id
+        if doc_id > self.max_doc_id:
+            self.max_doc_id = doc_id
 
+        self.current_docs += 1
         for term, positions in doc_terms.items():
             if term not in self.term_map:
                 self.term_map[term] = Term(term, 0, {})
 
             self.term_map[term].update_with_postings(doc_id, positions)
-            self.current_docs += 1
 
-            if self.current_docs >= self.shard_size and self.shard != -1:
-                self.flush(self.curr_shard)
+            if self.current_docs >= self.shard_size:
+                self.flush(self.shard, self.curr_shard)
 
                 self.curr_shard += 1
                 self.current_docs = 0
 
-    def flush(self, shard: int = -1):
+    def flush(self, shard: int = -1, sub_shard: int = 0):
         """
         By default, flushes both a non-positional and positional index to disk.
         """
-        self._flush_shard(shard, shard_filename="shard", flush_positions=False)
-        self._flush_shard(shard, shard_filename="pos_shard", flush_positions=True)
+        self._flush_shard(
+            shard, sub_shard=sub_shard, shard_filename="shard", flush_positions=False
+        )
+        self._flush_shard(
+            shard, sub_shard=sub_shard, shard_filename="pos_shard", flush_positions=True
+        )
 
         self.term_map = {}
+        self.min_doc_id = float("inf")
+        self.max_doc_id = float("-inf")
+        self.start = time.time()
 
     def _flush_shard(
-        self, shard: int = -1, shard_filename="shard", flush_positions=False
+        self,
+        shard: int = -1,
+        sub_shard: int = 0,
+        shard_filename="shard",
+        flush_positions=False,
     ):
         """
         Flush the current term map to disk.
@@ -102,11 +119,16 @@ class DocumentShardedIndexBuilder:
         shard = self.curr_shard if shard == -1 else shard
         shard = self.shard if self.shard != -1 else shard
 
-        shard_path = os.path.join(self.index_path, f"{shard_filename}_{shard}.index")
+        shard_str = str(shard)
+        shard_str = f"{shard}_{sub_shard}"
+
+        shard_path = os.path.join(
+            self.index_path, f"{shard_filename}_{shard_str}.index"
+        )
         offset_dict = {}
 
         logger.info(
-            f"Flushing shard {shard} with {len(self.term_map)} terms to {shard_path}"
+            f"Flushing shard {shard_str} with {len(self.term_map)} terms to {shard_path}. Documents processed: {self.current_docs} in {time.time()-self.start}. Min doc ID: {self.min_doc_id}. Max doc ID: {self.max_doc_id}"
         )
 
         with open(shard_path, "wb") as f:
@@ -144,8 +166,12 @@ class DocumentShardedIndexBuilder:
                             f.write(struct.pack(SIZE_KEY["position_delta"], delta))
                             prev_position = position
 
-        offset_path = os.path.join(self.index_path, f"{shard_filename}_{shard}.offset")
-        logger.info(f"Flushing offset for shard {shard} with filename {offset_path}")
+        offset_path = os.path.join(
+            self.index_path, f"{shard_filename}_{shard_str}.offset"
+        )
+        logger.info(
+            f"Flushing offset for shard {shard_str} with filename {offset_path}"
+        )
 
         with open(offset_path, "wb") as offset_f:
             for term, offset in offset_dict.items():
@@ -242,6 +268,9 @@ class IndexMerger:
         self.index_path = os.path.abspath(index_path)
         self.output_dir = index_path if output_dir == "" else output_dir
 
+        self.cleanup()
+
+    def cleanup(self):
         if os.path.exists(self.output_dir):
             logger.info(f"Removing existing index directory: {self.output_dir}")
             for f in os.listdir(self.output_dir):
@@ -249,7 +278,31 @@ class IndexMerger:
                     logger.info(f"Removing {f}")
                     os.remove(os.path.join(self.output_dir, f))
 
-    def merge(self):
+    def merge(self, shards: int = 24, merge_subshards=False):
+        """
+        Merges the shards in the index directory into a single index file if shards is -1.
+        Otherwise, merges the subshards of a single shard. There are `shards` number of shards.
+        """
+        if shards == -1 or not merge_subshards:
+            logger.info("Merging all shards")
+            self._merge_all()
+            return
+
+        for i in range(shards):
+            self._merge(
+                shard_filename="shard",
+                save_filename="postings",
+                merge_positions=False,
+                shard=i,
+            )
+            self._merge(
+                shard_filename="pos_shard",
+                save_filename="positions",
+                merge_positions=True,
+                shard=i,
+            )
+
+    def _merge_all(self):
         self._merge(
             shard_filename="shard", save_filename="postings", merge_positions=False
         )
@@ -258,20 +311,33 @@ class IndexMerger:
         )
 
     def _merge(
-        self, shard_filename="shard", save_filename="postings", merge_positions=False
+        self,
+        shard_filename="shard",
+        save_filename="postings",
+        merge_positions=False,
+        shard=-1,
     ):
-        shard_files = glob.glob(
-            os.path.join(self.index_path, f"{shard_filename}_*.index")
-        )
-        offset_files = glob.glob(
-            os.path.join(self.index_path, f"{shard_filename}_*.offset")
-        )
+        if shard == -1:
+            shard_files = glob.glob(
+                os.path.join(self.index_path, f"{shard_filename}_*.index")
+            )
+            offset_files = glob.glob(
+                os.path.join(self.index_path, f"{shard_filename}_*.offset")
+            )
+        else:
+            shard_files = [
+                os.path.join(self.index_path, f"{shard_filename}_{shard}_*.index")
+            ]
+            offset_files = [
+                os.path.join(self.index_path, f"{shard_filename}_{shard}_*.offset")
+            ]
 
+        extract_shard = lambda x, y: int(x.split("_")[y].split(".")[0])
         shard_files = sorted(
-            shard_files, key=lambda x: int(x.split("_")[-1].split(".")[0])
+            shard_files, key=lambda x: (extract_shard(x, -2), extract_shard(x, -1))
         )
         offset_files = sorted(
-            offset_files, key=lambda x: int(x.split("_")[-1].split(".")[0])
+            offset_files, key=lambda x: (extract_shard(x, -2), extract_shard(x, -1))
         )
 
         postings_file = os.path.join(self.output_dir, f"{save_filename}.bin")
@@ -322,6 +388,12 @@ class IndexMerger:
         self._build_term_fst(
             term_offsets, save_filename="pos_terms" if merge_positions else "terms"
         )
+
+        for shard_file in shard_files:
+            os.remove(shard_file)
+
+        for offset_file in offset_files:
+            os.remove(offset_file)
 
     def _build_term_fst(self, term_offsets, save_filename="terms"):
         logger.info(f"Building FST for {len(term_offsets)} terms")
@@ -427,8 +499,6 @@ class IndexBuilder:
         self.title_preprocessor = Preprocessor(parser_kwargs={"parser_type": "raw"})
         self.body_preprocessor = Preprocessor(parser_kwargs={"parser_type": "html"})
 
-        self.index_merger = IndexMerger(self.index_path)
-
         self.debug = debug
 
         self.write_txt = write_txt
@@ -453,8 +523,9 @@ class IndexBuilder:
         if not self.write_txt:
             return
 
+        index_merger = IndexMerger(self.index_path)
         with open(os.path.join(self.index_path, "index.txt"), "a") as f:
-            self.index_merger.write_index(f)
+            index_merger.write_index(f)
 
     def process_posts(self):
         with self.db_connection as conn:
@@ -465,6 +536,7 @@ class IndexBuilder:
             max_id = max_id if not self.debug else min_id + 1000
 
             partitions = self._calculate_partitions(min_id, max_id, num_posts, conn)
+            logger.info(f"Calculated partitions: {partitions}")
 
         assert (
             partitions[-1][1] == max_id and partitions[0][0] == min_id
@@ -484,12 +556,27 @@ class IndexBuilder:
                 )
                 for i in range(self.num_shards)
             ]
+            merge_future = executor.submit(self._merge_sub_shards)
 
             for future in concurrent.futures.as_completed(futures):
                 _ = future.result()
 
-        self.index_merger.merge()
+            merge_future.cancel()  # stop sub-shards from merging
+
         self._append_index_file()
+        self._merge_shards()
+
+    def _merge_sub_shards(self):
+        index_merger = IndexMerger(self.index_path)
+
+        logger.info("Merging sub-shards")
+        while True:
+            index_merger.merge(shards=self.num_shards, merge_subshards=True)
+            time.sleep(30)
+
+    def _merge_shards(self):
+        index_merger = IndexMerger(self.index_path)
+        index_merger.merge()
 
     def _process_posts_shard(self, shard: int, start: int, end: int, db_params: dict):
         """
@@ -515,9 +602,7 @@ class IndexBuilder:
         with proc_conn as conn:
             cur = conn.get_cursor(name=f"index_builder_{shard}")
             # include tags???
-            select_query = (
-                f"SELECT id, title, body FROM posts WHERE id >= {start} AND id <= {end}"
-            )
+            select_query = f"SELECT id, title, body FROM posts WHERE id >= {start} AND id <= {end} ORDER BY id ASC"
             cur.execute(select_query)
             logger.info(
                 "Processing shard %d: %d-%d with query %s",
@@ -620,6 +705,36 @@ class IndexBuilder:
         if conn is None:
             return []
 
+        partition_precomputed = [
+            (4, 3151437),
+            (3151438, 6120881),
+            (6120882, 9103209),
+            (9103210, 12120967),
+            (12120968, 15197897),
+            (15197899, 18345721),
+            (18345722, 21501458),
+            (21501459, 24696756),
+            (24696757, 27929211),
+            (27929213, 31113102),
+            (31113103, 34294425),
+            (34294426, 37514246),
+            (37514248, 40772152),
+            (40772154, 44040056),
+            (44040057, 47344058),
+            (47344062, 50695276),
+            (50695277, 54025254),
+            (54025256, 57348340),
+            (57348342, 60697390),
+            (60697392, 64144975),
+            (64144977, 67700460),
+            (67700461, 71226625),
+            (71226626, 74816231),
+            (74816232, 78253176),
+        ]
+
+        if len(partition_precomputed) == self.num_shards:
+            return partition_precomputed
+
         partition_query = f"""
             WITH rows AS (
                 SELECT id, ROW_NUMBER() OVER (ORDER BY id) as row_num
@@ -644,7 +759,7 @@ if __name__ == "__main__":
     from constants import DB_PARAMS
     from indexor.index import Index
 
-    DB_PARAMS["database"] = "stack_overflow_small"
+    DB_PARAMS["database"] = "stack_overflow"
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--index-path", type=str, default=".cache/index")

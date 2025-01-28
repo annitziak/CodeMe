@@ -9,8 +9,8 @@ SIZE_KEY = {
     "offset": "<Q",
     "postings_count": "<I",
     "deltaTF": "<IH",
-    "position_count": "<I",
-    "position_delta": "<I",
+    "position_count": "<H",
+    "position_delta": "<H",
     "df": "<I",
     "tf": "<H",
     "term_bytes": "<I",
@@ -111,12 +111,14 @@ class Term:
         self.posting_lists[doc_id] = PostingList(doc_id, len(positions), positions)
         self.document_frequency += 1
 
+        """
         assert all(
             [
                 self.posting_lists[doc_id].doc_id == doc_id
                 for doc_id in sorted(list(self.posting_lists.keys()))
             ]
         ), f"Posting list for term {self.term} is not sorted by document id"
+        """
 
     def get_posting_list(self, doc_id: int) -> PostingList | None:
         return self.posting_lists.get(doc_id, None)

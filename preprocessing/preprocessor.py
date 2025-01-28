@@ -38,7 +38,15 @@ class Preprocessor:
                 StopWordNormalizer(stop_words_file="preprocessing/stop_words.txt"),
                 StemmingNormalizer(),
                 NfdNormalizer(),
-            ]
+            ],
+            "code_normalizer_operations": [
+                LowerCaseNormalizer(),
+                NfdNormalizer(),
+            ],
+            "link_normalizer_operations": [
+                LowerCaseNormalizer(),
+                NfdNormalizer(),
+            ],
         },
     ):
         self.parser = BuildParser(**parser_kwargs)
