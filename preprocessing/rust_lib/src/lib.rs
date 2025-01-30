@@ -1,7 +1,7 @@
 use pyo3::ffi::PyBuffer_GetPointer;
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PySet};
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
@@ -63,8 +63,11 @@ impl Tokenizer {
             '(?:\\.|[^'])*'                           # char literals
         )$"#;
 
-        let literal_regex = Regex::new(literal_pattern.unwrap_or(default_literal_pattern))
-            .expect("Invalid regex pattern");
+        let literal_regex = RegexBuilder::new(literal_pattern.unwrap_or(default_literal_pattern))
+            .size_limit(1000 * 1000)
+            .dfa_size_limit(1000 * 1000)
+            .build()
+            .unwrap();
 
         Self {
             symbols,
@@ -108,7 +111,7 @@ impl Tokenizer {
     }
 
     fn tokenize(&self, text: &str) -> Vec<Term> {
-        let mut tokens = Vec::new();
+        let mut tokens = Vec::with_capacity(text.len() / 4);
         let mut buffer = String::with_capacity(32);
         let mut char_indices = text.char_indices().peekable();
 
@@ -162,17 +165,16 @@ impl Tokenizer {
     }
 
     fn encode(&self, buffer: &str) -> Vec<String> {
-        buffer.split_whitespace().map(|s| s.to_string()).collect()
+        buffer
+            .split_whitespace()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
     }
 
     fn add_token(&self, buffer: &str, tokens: &mut Vec<Term>, start: usize, end: usize) {
-        tokens.push(Term::new(
-            buffer.to_string(),
-            buffer.to_string(),
-            tokens.len(),
-            start,
-            end,
-        ));
+        let term = buffer.to_owned();
+        tokens.push(Term::new(term.clone(), term, tokens.len(), start, end));
     }
 }
 
@@ -182,9 +184,10 @@ fn tokenize_code(py: Python<'_>, text: &str) -> PyResult<Py<PyList>> {
     let tokens = tokenizer.tokenize(text);
 
     let py_list = PyList::empty(py);
-    for token in tokens {
-        py_list.append(Py::new(py, token)?)?;
-    }
+
+    tokens
+        .into_iter()
+        .try_for_each(|token| py_list.append(Py::new(py, token)?))?;
 
     Ok(py_list.into())
 }

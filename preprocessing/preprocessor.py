@@ -40,12 +40,12 @@ class Preprocessor:
                 NfdNormalizer(),
             ],
             "code_normalizer_operations": [
-                LowerCaseNormalizer(),
-                NfdNormalizer(),
+                # LowerCaseNormalizer(),
+                # NfdNormalizer(),
             ],
             "link_normalizer_operations": [
-                LowerCaseNormalizer(),
-                NfdNormalizer(),
+                # LowerCaseNormalizer(),
+                # NfdNormalizer(),
             ],
         },
     ):

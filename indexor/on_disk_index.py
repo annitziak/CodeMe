@@ -5,7 +5,8 @@ import mmap
 import struct
 import copy
 
-from indexor.structures import READ_SIZE_KEY, Term, PostingList, IndexBase, SIZE_KEY
+from indexor.structures import Term, PostingList, IndexBase
+from indexor.index_builder.constants import SIZE_KEY, READ_SIZE_KEY
 
 
 class OnDiskIndex(IndexBase):

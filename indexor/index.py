@@ -57,6 +57,9 @@ if __name__ == "__main__":
 
     index = Index(load_path=args.index_path)
 
+    term_obj = index.get_term("!", positions=True)
+    print(term_obj)
+
     term_obj = index.get_union(["hello", "python"])
     print(term_obj)
 
