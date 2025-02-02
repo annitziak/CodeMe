@@ -1,7 +1,10 @@
 import logging
+import json
 import os
 import concurrent.futures
 import time
+
+from filelock import FileLock
 
 from indexor.index_builder.index_builder import DocumentShardedIndexBuilder
 from indexor.index_builder.index_merger import IndexMerger
@@ -25,6 +28,8 @@ class IndexBuilder:
         batch_size: int = 1000,
         num_workers: int = 24,
         debug=False,
+        action: str = "build",
+        is_sharded=False,
     ) -> None:
         """
         Args:
@@ -41,16 +46,28 @@ class IndexBuilder:
         self.db_connection = DBConnection(db_params)
 
         self.index_path = index_path
+        self.temp_index_path = index_path  # ".cache/temp"
         self.doc_metadata = {}
 
         self.batch_size = batch_size
         self.num_workers = min(num_workers, os.cpu_count() - 1)
         self.num_shards = self.num_workers - 1  # leave one worker for merging
 
+        self.action = action
+        self.is_sharded = is_sharded
+
         self.title_preprocessor = Preprocessor(parser_kwargs={"parser_type": "raw"})
         self.body_preprocessor = Preprocessor(parser_kwargs={"parser_type": "html"})
 
         self.debug = debug
+        self.config = {
+            "batch_size": self.batch_size,
+            "num_shards": self.num_shards,
+            "is_sharded": self.is_sharded,
+        }
+
+        with open(os.path.join(self.index_path, "config.json"), "w") as f:
+            json.dump(self.config, f)
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -76,6 +93,17 @@ class IndexBuilder:
         - The number of workers is capped at the number of available CPUs minus 1
         - Coordination between the main process and the workers is done via a file .cache/shards_finished. Each worker writes to this file when it finishes processing its shard so that we can kill the sub-shard merging process
         """
+        if self.action == "merge":
+            logger.info("Merging shards")
+            return self._merge_shards()
+        elif self.action == "build-fst":
+            logger.info("Building FST index")
+            index_merger = IndexMerger(self.temp_index_path, output_dir=self.index_path)
+            return index_merger.build_all_term_fsts(shards=self.num_shards)
+
+        assert self.action == "build", f"Invalid action: {self.action}"
+        logger.info("Building index")
+
         with self.db_connection as conn:
             min_id, max_id, num_posts = self._get_id_stats(conn)
             logger.info(
@@ -89,9 +117,11 @@ class IndexBuilder:
         with open(".cache/shards_finished", "w") as f:
             f.write("")
 
+        """
         assert (
             partitions[-1][1] == max_id and partitions[0][0] == min_id
         ), f"{partitions[0]}!={min_id} or {partitions[-1]}!={max_id}"
+        """
 
         logger.info(f"Processing {num_posts} posts in {self.num_shards} shards")
         with concurrent.futures.ProcessPoolExecutor(
@@ -112,8 +142,10 @@ class IndexBuilder:
             for future in concurrent.futures.as_completed(futures):
                 _ = future.result()
 
-                with open(".cache/shards_finished", "a") as f:
-                    f.write("FINISHED\n")
+                file_lock = FileLock(".cache/shards_finished")
+                with file_lock:
+                    with open(".cache/shards_finished", "a") as f:
+                        f.write("FINISHED\n")
 
             time.sleep(1)
             merge_future.result()  # stop sub-shards from merging
@@ -128,10 +160,11 @@ class IndexBuilder:
 
         Also, deletes all prior shards in the index folder specified
         """
-        index_merger = IndexMerger(self.index_path)
+        index_merger = IndexMerger(self.temp_index_path)
         index_merger.cleanup()
 
         value = 0
+        file_lock = FileLock(".cache/shards_finished")
 
         logger.info("Merging sub-shards")
         while value < self.num_shards:
@@ -140,8 +173,9 @@ class IndexBuilder:
             )
             time.sleep(1)
 
-            with open(".cache/shards_finished", "r") as f:
-                value = len(f.readlines())
+            with file_lock:
+                with open(".cache/shards_finished", "r") as f:
+                    value = len(f.readlines())
 
         index_merger.merge(
             shards=self.num_shards, merge_subshards=True, force_merge=True
@@ -149,10 +183,16 @@ class IndexBuilder:
         logger.info("Finished merging sub-shards")
 
     def _merge_shards(self):
-        index_merger = IndexMerger(self.index_path)
+        index_merger = IndexMerger(self.temp_index_path, output_dir=self.index_path)
+
+        if self.is_sharded:
+            logger.info("Skipping final merge")
+            index_merger.post_merge_cleanup()
+            return
 
         logger.info("Performing final merge")
         index_merger.merge()
+        index_merger.post_merge_cleanup()
 
     def _process_posts_shard(self, shard: int, start: int, end: int, db_params: dict):
         """
@@ -169,7 +209,7 @@ class IndexBuilder:
             shard: int - the shard number that was processed
         """
 
-        index_builder = DocumentShardedIndexBuilder(self.index_path, shard)
+        index_builder = DocumentShardedIndexBuilder(self.temp_index_path, shard)
 
         proc_conn = DBConnection(db_params)
         min_id = float("inf")
@@ -207,7 +247,7 @@ class IndexBuilder:
         logger.info(f"Processed shard {shard}: {start}-{end} => {str(index_builder)}")
         index_builder.flush(shard)
 
-        return shard
+        return index_builder.doc_count
 
     def _process_posts_batch(self, rows: tuple[list]):
         """
@@ -345,12 +385,22 @@ if __name__ == "__main__":
     from constants import DB_PARAMS
     from indexor.index import Index
 
-    DB_PARAMS["database"] = "stack_overflow"
+    DB_PARAMS["database"] = "stack_overflow_small"
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--index-path", type=str, default=".cache/index")
+    parser.add_argument("--index-path", type=str, default=".cache/index", required=True)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=24)
+    parser.add_argument(
+        "--action",
+        choices=["build", "merge", "build-fst"],
+        help="build: build the index and merge shards, merge: merge the shards to form the final index, build-fst: build the FST index from the existing index shards (shard_0, shard_1, etc.) => terms.fst",
+    )
+    parser.add_argument(
+        "--is-sharded",
+        action="store_true",
+        help="Should we merge the shards shard_0...shard_n to form the final index postings.bin and terms.fst",
+    )
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
@@ -360,6 +410,8 @@ if __name__ == "__main__":
         debug=args.debug,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        action=args.action,
+        is_sharded=args.is_sharded,
     )
     builder.process_posts()
 

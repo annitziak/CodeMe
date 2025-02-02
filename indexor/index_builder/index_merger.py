@@ -6,6 +6,7 @@ import struct
 import shutil
 import filelock
 import marisa_trie
+import datrie
 
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -38,15 +39,103 @@ class HeapItem:
 class IndexMerger:
     def __init__(self, index_path: str, output_dir: str = ""):
         self.index_path = os.path.abspath(index_path)
-        self.output_dir = index_path if output_dir == "" else output_dir
+        self.output_dir = output_dir if output_dir != "" else self.index_path
 
     def cleanup(self):
         if os.path.exists(self.output_dir):
             logger.info(f"Removing existing index directory: {self.output_dir}")
+            confirm = input("Are you sure you want to remove the directory? (y/(n)): ")
+            if confirm.lower() != "y":
+                logger.info("Exiting cleanup")
+                exit(0)
+
             for f in os.listdir(self.output_dir):
-                if "shard" in f:
+                if "shard" in f or "postings" in f or "terms" in f or "positions" in f:
                     logger.info(f"Removing {f}")
                     os.remove(os.path.join(self.output_dir, f))
+
+    def post_merge_cleanup(self):
+        logger.info("Removing temporary files and lock files")
+        for f in os.listdir(self.output_dir):
+            if ".temp" in f:
+                logger.info(f"Removing {f}")
+                os.remove(os.path.join(self.output_dir, f))
+            if ".lock" in f:
+                logger.info(f"Removing {f}")
+                os.remove(os.path.join(self.output_dir, f))
+
+    def build_datrie_from_generator(self, generator, chunk_size=100000):
+        chunk = []
+        min_char = "a"
+        max_char = "z"
+
+        for term, shard, offset in generator:
+            min_char = min(min_char, min(term))
+            max_char = max(max_char, max(term))
+
+            chunk.append((term, shard, offset))
+            if len(chunk) >= chunk_size:
+                break
+
+        trie = datrie.Trie(ranges=[(min_char, max_char)])
+
+        for term, shard, offset in chunk:
+            packed_value = struct.pack(SIZE_KEY["offset_shard"], shard, offset)
+            trie[term] = packed_value
+
+        for term, shard, offset in generator:
+            packed_value = struct.pack(SIZE_KEY["offset_shard"], shard, offset)
+            if term < min_char or term > max_char:
+                raise ValueError(f"Invalid term {term}")
+            trie[term] = packed_value
+
+        return trie
+
+    def build_all_term_fsts(
+        self,
+        term_offsets: OrderedDict | None = None,
+        shards: int = 24,
+        save_filename="terms",
+    ):
+        items = []
+
+        def gen_term_offset(term_offsets):
+            if term_offsets is None:
+                term_offsets = OrderedDict()
+                for i in range(shards):
+                    reader = ShardReader(
+                        os.path.join(self.index_path, f"shard_{i}.index"),
+                        os.path.join(self.index_path, f"shard_{i}.offset"),
+                    )
+                    while True:
+                        term, offset = reader.next_term()
+                        if term is None or offset is None:
+                            break
+
+                        yield term, i, offset
+
+                    reader.close()
+
+                    logger.info(f"Finished reading shard {i}")
+                    yield None, None, None
+
+        for term, shard, offset in gen_term_offset(term_offsets):
+            if term is None or offset is None or shard is None:
+                fst = marisa_trie.BytesTrie(items)
+                fst.save(os.path.join(self.output_dir, f"{save_filename}.fst"))
+                logger.info(f"Saved {save_filename}.fst")
+                continue
+
+            encoded_value = struct.pack(SIZE_KEY["offset_shard"], shard, offset)
+            items.append((term, encoded_value))
+
+        fst = marisa_trie.BytesTrie(items)
+        fst.save(os.path.join(self.output_dir, f"{save_filename}.fst"))
+        # datrie = self.build_datrie_from_generator(gen_term_offset(term_offsets))
+        # datrie.save(os.path.join(self.output_dir, f"{save_filename}.dat"))
+        # return datrie
+
+        return fst
 
     def merge(self, shards: int = 24, merge_subshards=False, force_merge=False):
         """
@@ -82,6 +171,7 @@ class IndexMerger:
                 force_merge=force_merge,
                 shard=i,
             )
+            self._merge_docs(shard=i, force_merge=force_merge)
 
     def _merge_all(self):
         self._merge(
@@ -214,7 +304,7 @@ class IndexMerger:
                     term, offset, reader = heapq.heappop(heap)
 
                     assert term not in term_offsets
-                    term_offsets[term] = postings_f.tell()
+                    term_offsets[term] = (shard, postings_f.tell())
 
                     all_postings = reader.read_postings(
                         offset, read_positions=merge_positions
@@ -253,8 +343,15 @@ class IndexMerger:
 
         if shard == -1:
             fst_save_filename = "pos_terms" if merge_positions else "terms"
+            # Builds terms.fst with (-1, offset) i.e. shard, offset
             self._build_term_fst(term_offsets, save_filename=fst_save_filename)
         else:
+            fst_save_filename = (
+                f"pos_terms_{shard}" if merge_positions else f"terms_{shard}"
+            )
+            self._build_term_fst(term_offsets, save_filename=fst_save_filename)
+
+        if shard != -1:
             offset_filename = os.path.join(
                 self.output_dir, f"{shard_filename}_{shard}.temp.offset"
             )
@@ -289,12 +386,33 @@ class IndexMerger:
 
         logger.info(f"Merged {shard_filename} {shard} to {postings_file}")
 
-    def _build_term_fst(self, term_offsets, save_filename="terms"):
+    def _build_term_fst(
+        self, term_offsets, save_filename="terms", load_filename="terms"
+    ):
+        """
+        Builds the FST for the terms and saves as `terms.fst` or `pos_terms.fst`
+        If `shard` is -1 then we save each term as [term, offset] in the FST
+        If `shard` is not -1 then we save each term with reference to the shard. As [term, shard, offset]
+        """
         logger.info(f"Building FST for {len(term_offsets)} terms")
+        if os.path.exists(os.path.join(self.output_dir, f"{load_filename}.fst")):
+            logger.info(f"Loading {load_filename}.fst")
+            fst = marisa_trie.BytesTrie()
+            fst.load(os.path.join(self.output_dir, f"{load_filename}.fst"))
+            logger.info(f"Loaded {load_filename}.fst")
+            items = [(term, value) for term, values in fst.items() for value in values]
+        else:
+            items = []
 
-        items = []
-        for term, offset in term_offsets.items():
-            value = struct.pack("<Q", offset)
+        for term, (shard, offset) in term_offsets.items():
+            if shard == -1:
+                offset_encoding = struct.pack(SIZE_KEY["offset"], offset)
+                value = (term, offset_encoding)
+            else:
+                shard_offset_encoding = struct.pack(
+                    SIZE_KEY["offset_shard"], shard, offset
+                )
+                value = (term, shard_offset_encoding)
             items.append((term, value))
 
         fst = marisa_trie.BytesTrie(items)
@@ -333,6 +451,57 @@ class IndexMerger:
                     delta = position - prev_position
                     f.write(struct.pack(SIZE_KEY["position_delta"], delta))
                     prev_position = position
+
+    def _merge_docs(self, shard=-1, sub_shard=0, force_merge=False):
+        """
+        Merges the documents from the shards into a single file
+        If `shard` is -1, then we merge all shards into a single file
+        If `shard` is not -1, then we merge the sub-shards into a single file
+
+        We read the document from each shard and write to the output file
+        """
+        base_shard_files = glob.glob(
+            os.path.join(self.index_path, f"doc_shard_{shard}.index")
+        )
+
+        sub_shard_name = f"{shard}_*" if shard != -1 else "*"
+        shard_files = glob.glob(
+            os.path.join(self.index_path, f"doc_shard_{sub_shard_name}.index")
+        )
+
+        if len(shard_files) < 2 and not force_merge:
+            logger.debug(f"Skipping shard {shard} with {len(shard_files)} files")
+            return
+
+        if len(base_shard_files) > 0:
+            shard_files.insert(0, base_shard_files[0])
+
+        docs_file = os.path.join(self.output_dir, "docs.bin")
+        if shard != -1:
+            docs_file = os.path.join(self.output_dir, f"doc_shard_{shard}.temp.index")
+
+        logger.info(
+            f"Merging files {shard_files}. force_merge={force_merge}. Saving to {docs_file} ..."
+        )
+
+        lock_docs_file = filelock.FileLock(docs_file + ".lock")
+        logger.debug(f"Locking {docs_file}")
+        with lock_docs_file:
+            with open(docs_file, "wb") as docs_f:
+                for shard_file in shard_files:
+                    with open(shard_file, "rb") as shard_f:
+                        shutil.copyfileobj(shard_f, docs_f)
+
+        logger.debug(f"Unlocked {docs_file}")
+        shutil.move(docs_file, docs_file.replace(".temp", ""))
+
+        for shard_file in shard_files:
+            if len(base_shard_files) > 0 and shard_file == base_shard_files[0]:
+                continue
+
+            os.remove(shard_file)
+
+        logger.info(f"Merged doc_shard {shard} to {docs_file}")
 
     def write_index(self, f):
         logger.info("Writing index to file")

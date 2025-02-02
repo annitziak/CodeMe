@@ -1,5 +1,6 @@
 SIZE_KEY = {
     "offset": "<Q",
+    "offset_shard": "<HQ",
     "postings_count": "<I",
     "deltaTF": "<IH",
     "position_count": "<H",
@@ -14,4 +15,5 @@ READ_SIZE_KEY = {
     "<I": 4,
     "<H": 2,
     "<IH": 6,
+    "<HQ": 10,
 }

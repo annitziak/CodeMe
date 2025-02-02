@@ -38,6 +38,9 @@ class Index(IndexBase):
     def get_posting_list(self, term: str, doc_id: int) -> PostingList | None:
         return self.index.get_posting_list(term, doc_id)
 
+    def get_all_documents(self):
+        return self.index.get_all_documents()
+
     def get_intersection(self, terms: list[str]) -> list[int]:
         return self.index.get_intersection(terms)
 
@@ -50,6 +53,7 @@ class Index(IndexBase):
 
 if __name__ == "__main__":
     import argparse
+    import time
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--index-path", type=str, required=True)
@@ -57,7 +61,8 @@ if __name__ == "__main__":
 
     index = Index(load_path=args.index_path)
 
-    term_obj = index.get_term("!", positions=True)
+    """
+    term_obj = index.get_term("!", positions=False)
     print(term_obj)
 
     term_obj = index.get_union(["hello", "python"])
@@ -65,12 +70,50 @@ if __name__ == "__main__":
 
     term_obj = index.get_intersection(["hello", "python"])
     print(term_obj)
+    """
+
+    """
+    terms = index.get_all_documents()
+    print(terms)
+
+    with open("document_terms.txt", "w") as f:
+        for doc_id, terms in terms.items():
+            term_str = "\t".join(terms)
+            f.write(f"{doc_id} : {term_str}")
+            f.write("\n")
+    """
 
     while True:
-        term = input("Enter a term to look up (Press q to quit): ")
+        term = input(
+            "Enter a term to look up (Press q to quit) or a query decided by the first two characters 'BB': "
+        )
+        start = time.time()
         try:
-            term_obj = index.get_term(term, positions=True)
-            print(term_obj)
+            if len(term) > 2:
+                if term[:2] == "BB":
+                    terms = term.split(" ")[1:]
+                    if len(terms) == 1 and terms[0][0] == "!":
+                        term_obj = index.get_complement(terms[1])
+                        print(f"Time taken for get_complement: {time.time() - start}")
+                        print(term_obj)
+                    elif len(terms) == 3 and terms[1] == "<I>":
+                        term_obj = index.get_intersection([terms[0], terms[2]])
+                        print(f"Time taken for get_intersection: {time.time() - start}")
+                        print(term_obj)
+                    elif len(terms) == 3 and terms[1] == "<U>":
+                        term_obj = index.get_union([terms[0], terms[2]])
+                        print(f"Time taken for get_union: {time.time() - start}")
+                        print(term_obj)
+                    else:
+                        print(f"Invalid query: {terms}")
+                else:
+                    term_obj = index.get_term(term, positions=False)
+                    print(f"Time taken for get_term: {time.time() - start}")
+                    print(term_obj)
+
+                    term_obj = index.get_posting_list(term, 15198967)
+                    print(f"Time taken for get_posting_list: {time.time() - start}")
+                    print(term_obj)
         except ValueError as e:
             logger.error(e)
             continue
