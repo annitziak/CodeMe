@@ -8,6 +8,8 @@ SIZE_KEY = {
     "df": "<I",
     "tf": "<H",
     "term_bytes": "<I",
+    "doc_id": "<Q",
+    "doc_length": "<I",
 }
 
 READ_SIZE_KEY = {

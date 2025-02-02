@@ -2,7 +2,6 @@ import bisect
 from collections import namedtuple
 import pprint
 import time
-import copy
 import logging
 
 from abc import ABC, abstractmethod
@@ -32,7 +31,7 @@ class Term:
     term: str
     document_frequency: int = 0
     # posting_lists: dict[int, PostingList | None] = field(default_factory=dict)
-    posting_lists: list[PostingList] = field(default_factory=list)
+    posting_lists: list[PostingList | MutablePostingList] = field(default_factory=list)
 
     def __str__(self):
         posting_list = [x for x in self.posting_lists if x is not None][:10]
@@ -45,41 +44,26 @@ class Term:
     def __repr__(self):
         return f"{self.document_frequency}"
 
-    def __and__(self, other):
-        return_term = Term(f"{self.term} AND {other.term}", 0)
-        for doc_id, posting_list in self.posting_lists.items():
-            if doc_id in other.posting_lists and posting_list is not None:
-                posting_list = copy.deepcopy(posting_list)
-                posting_list.positions = []
-                posting_list.doc_term_frequency = 0
-                return_term.posting_lists[doc_id] = posting_list
+    def update_with_doc_term_frequency(self, doc_id: int, term_frequency: int):
+        posting_list = self.get_posting_list(doc_id)
+        if posting_list is None:
+            self.posting_lists.append(PostingList(doc_id, term_frequency, []))
+        else:
+            posting_list.doc_term_frequency += term_frequency
 
-        return return_term
+        self.document_frequency += 1
 
-    def __or__(self, other):
-        return_term = Term(f"{self.term} OR {other.term}", 0)
-        for posting_list in self.posting_lists:
-            doc_id = posting_list.doc_id
-            if posting_list is None:
-                continue
+    def update_with_postings(self, doc_id: int, new_positions: list[int]):
+        posting_list = self.get_posting_list(doc_id)
+        if posting_list is None:
+            self.posting_lists.append(
+                PostingList(doc_id, len(new_positions), new_positions)
+            )
+        else:
+            posting_list.doc_term_frequency += 1
+            posting_list.positions.extend(new_positions)
 
-            posting_list = copy.deepcopy(posting_list)
-            posting_list.positions = []
-            posting_list.doc_term_frequency = 0
-            return_term.posting_lists[doc_id] = posting_list
-
-        for posting_list in other.posting_lists:
-            doc_id = posting_list.doc_id
-            if doc_id not in return_term.posting_lists and posting_list is not None:
-                posting_list = copy.deepcopy(posting_list)
-                posting_list.positions = []
-                posting_list.doc_term_frequency = 0
-                return_term.posting_lists[doc_id] = posting_list
-
-        return return_term
-
-    def __not__(self):
-        raise NotImplementedError("NOT operator is not supported")
+        self.document_frequency += 1
 
     def update(self, term, positions=False):
         self.document_frequency += term.document_frequency
@@ -121,16 +105,9 @@ class Term:
 
     def get_posting_list(self, doc_id: int) -> PostingList | None:
         if len(self.posting_lists) == 0 or doc_id < self.posting_lists[0].doc_id:
-            if len(self.posting_lists) > 0:
-                logger.info(
-                    f"Doc ID {doc_id} is less than the first doc ID in the posting list {self.posting_lists[0].doc_id}"
-                )
             return None
 
         if doc_id > self.posting_lists[-1].doc_id:
-            logger.info(
-                f"Doc ID {doc_id} is greater than the last doc ID in the posting list {self.posting_lists[-1].doc_id}"
-            )
             return None
 
         idx = bisect.bisect_left([x.doc_id for x in self.posting_lists], doc_id)

@@ -114,7 +114,7 @@ if __name__ == "__main__":
                 print(f"Time taken for get_term_by_prefix: {time.time() - start}")
                 print(term_obj)
             else:
-                term_obj = index.get_term(term, positions=False)
+                term_obj = index.get_term(term, positions=True)
                 print(f"Time taken for get_term: {time.time() - start}")
                 print(term_obj)
 

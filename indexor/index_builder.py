@@ -66,6 +66,9 @@ class IndexBuilder:
             "is_sharded": self.is_sharded,
         }
 
+        if not os.path.exists(self.index_path):
+            os.makedirs(self.index_path)
+
         with open(os.path.join(self.index_path, "config.json"), "w") as f:
             json.dump(self.config, f)
 
@@ -114,7 +117,8 @@ class IndexBuilder:
             partitions = self._calculate_partitions(min_id, max_id, num_posts, conn)
             logger.info(f"Calculated partitions: {partitions}")
 
-        with open(".cache/shards_finished", "w") as f:
+        shards_finished = os.path.join(self.index_path, "shards_finished")
+        with open(shards_finished, "w") as f:
             f.write("")
 
         """
@@ -139,12 +143,13 @@ class IndexBuilder:
                 for i in range(self.num_shards)
             ]
 
-            for future in concurrent.futures.as_completed(futures):
+            for idx, future in enumerate(concurrent.futures.as_completed(futures)):
                 _ = future.result()
+                logger.info(f"Finished processing shard {idx}")
 
-                file_lock = FileLock(".cache/shards_finished")
+                file_lock = FileLock(shards_finished + ".lock")
                 with file_lock:
-                    with open(".cache/shards_finished", "a") as f:
+                    with open(shards_finished, "a") as f:
                         f.write("FINISHED\n")
 
             time.sleep(1)
@@ -164,7 +169,8 @@ class IndexBuilder:
         index_merger.cleanup()
 
         value = 0
-        file_lock = FileLock(".cache/shards_finished")
+        shards_finished = os.path.join(self.index_path, "shards_finished")
+        file_lock = FileLock(shards_finished + ".lock")
 
         logger.info("Merging sub-shards")
         while value < self.num_shards:
@@ -174,9 +180,10 @@ class IndexBuilder:
             time.sleep(1)
 
             with file_lock:
-                with open(".cache/shards_finished", "r") as f:
+                with open(shards_finished, "r") as f:
                     value = len(f.readlines())
 
+        logger.info("All sub-shards finished. Performing final merge")
         index_merger.merge(
             shards=self.num_shards, merge_subshards=True, force_merge=True
         )
@@ -188,6 +195,10 @@ class IndexBuilder:
         if self.is_sharded:
             logger.info("Skipping final merge")
             index_merger.post_merge_cleanup()
+            index_merger.build_all_term_fsts(shards=self.num_shards)
+            index_merger.build_all_term_fsts(
+                shards=self.num_shards, prefix="pos_shard", save_filename="pos_terms"
+            )
             return
 
         logger.info("Performing final merge")

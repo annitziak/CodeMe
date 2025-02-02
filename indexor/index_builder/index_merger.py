@@ -44,13 +44,12 @@ class IndexMerger:
     def cleanup(self):
         if os.path.exists(self.output_dir):
             logger.info(f"Removing existing index directory: {self.output_dir}")
-            confirm = input("Are you sure you want to remove the directory? (y/(n)): ")
-            if confirm.lower() != "y":
-                logger.info("Exiting cleanup")
-                exit(0)
 
             for f in os.listdir(self.output_dir):
                 if "shard" in f or "postings" in f or "terms" in f or "positions" in f:
+                    if "finished" in f:
+                        continue
+
                     logger.info(f"Removing {f}")
                     os.remove(os.path.join(self.output_dir, f))
 
@@ -62,6 +61,9 @@ class IndexMerger:
                 os.remove(os.path.join(self.output_dir, f))
             if ".lock" in f:
                 logger.info(f"Removing {f}")
+                if not os.path.exists(os.path.join(self.output_dir, f)):
+                    continue
+
                 os.remove(os.path.join(self.output_dir, f))
 
     def build_datrie_from_generator(self, generator, chunk_size=100000):
@@ -95,6 +97,7 @@ class IndexMerger:
         self,
         term_offsets: OrderedDict | None = None,
         shards: int = 24,
+        prefix="shard",
         save_filename="terms",
     ):
         items = []
@@ -104,8 +107,8 @@ class IndexMerger:
                 term_offsets = OrderedDict()
                 for i in range(shards):
                     reader = ShardReader(
-                        os.path.join(self.index_path, f"shard_{i}.index"),
-                        os.path.join(self.index_path, f"shard_{i}.offset"),
+                        os.path.join(self.index_path, f"{prefix}_{i}.index"),
+                        os.path.join(self.index_path, f"{prefix}_{i}.offset"),
                     )
                     while True:
                         term, offset = reader.next_term()
@@ -118,6 +121,9 @@ class IndexMerger:
 
                     logger.info(f"Finished reading shard {i}")
                     yield None, None, None
+
+            for term, shard, offset in term_offsets:
+                yield term, shard, offset
 
         for term, shard, offset in gen_term_offset(term_offsets):
             if term is None or offset is None or shard is None:
@@ -413,14 +419,14 @@ class IndexMerger:
                     SIZE_KEY["offset_shard"], shard, offset
                 )
                 value = (term, shard_offset_encoding)
-            items.append((term, value))
+            items.append(value)
 
         fst = marisa_trie.BytesTrie(items)
         fst.save(os.path.join(self.output_dir, f"{save_filename}.fst"))
 
     def _write_merged_offset(self, f, term_offsets, shard):
         logger.info(f"Writing offsets for shard {shard}")
-        for term, offset in term_offsets.items():
+        for term, (_, offset) in term_offsets.items():
             term_bytes = term.encode("utf-8")
             f.write(struct.pack(SIZE_KEY["term_bytes"], len(term_bytes)))
             f.write(term_bytes)

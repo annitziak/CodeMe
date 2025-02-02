@@ -56,6 +56,7 @@ class DocumentShardedIndexBuilder:
         self.doc_map: dict[int, int] = {}
 
         self.current_docs = 0
+        self.doc_count = 0
 
         self.min_doc_id = float("inf")
         self.max_doc_id = float("-inf")
@@ -85,9 +86,10 @@ class DocumentShardedIndexBuilder:
             self.max_doc_id = doc_id
 
         self.current_docs += 1
+        self.doc_count += 1
         for term, positions in doc_terms.items():
             if term not in self.term_map:
-                self.term_map[term] = Term(term, 0, {})
+                self.term_map[term] = Term(term)
 
             self.term_map[term].update_with_postings(doc_id, positions)
 
@@ -157,8 +159,15 @@ class DocumentShardedIndexBuilder:
         lock_doc_meta_file = filelock.FileLock(doc_meta + ".lock")
         logger.debug(f"Locking {doc_meta}")
         with lock_doc_meta_file:
-            with open(doc_meta) as f:
-                shard_bounds = json.load(f)
+            if not os.path.exists(doc_meta):
+                shard_bounds = {}
+            else:
+                try:
+                    with open(doc_meta) as f:
+                        shard_bounds = json.load(f)
+                except json.JSONDecodeError:
+                    shard_bounds = {}
+                    logger.error(f"Error reading {doc_meta}")
 
             curr_min_doc_id = shard_bounds.get(shard, [float("inf"), float("-inf")])[0]
             curr_max_doc_id = shard_bounds.get(shard, [float("inf"), float("-inf")])[1]
@@ -168,14 +177,15 @@ class DocumentShardedIndexBuilder:
                 max(curr_max_doc_id, self.max_doc_id),
             ]
 
-            with open(doc_meta + ".meta", "w") as f:
+            with open(doc_meta, "w") as f:
                 json.dump(shard_bounds, f)
 
-        with open(doc_meta + ".meta", "w") as f:
-            f.write(f"{self.min_doc_id}\n")
-            f.write(f"{self.max_doc_id}\n")
+            logger.info(f"Written {shard_bounds} to {doc_meta}")
 
         logger.debug(f"Unlocked {doc_meta}")
+        logger.info(
+            f"Flushed doc map for shard {shard_str} with {len(self.doc_map)} documents to {doc_map_path}"
+        )
 
     def _flush_shard(
         self,
@@ -221,7 +231,9 @@ class DocumentShardedIndexBuilder:
                     # Save the offset of the term in the file in `offset_dict`
                     offset_dict[term] = f.tell()
 
-                    assert term_obj.document_frequency == len(term_obj.posting_lists)
+                    assert (
+                        term_obj.document_frequency == len(term_obj.posting_lists)
+                    ), f"Document frequency {term_obj.document_frequency} does not match the number of posting lists {(term_obj.posting_lists)}"
                     f.write(
                         struct.pack(
                             SIZE_KEY["postings_count"], term_obj.document_frequency
@@ -229,7 +241,7 @@ class DocumentShardedIndexBuilder:
                     )
 
                     prev_doc_id = 0
-                    for posting in term_obj.posting_lists.values():
+                    for posting in term_obj.posting_lists:
                         delta = posting.doc_id - prev_doc_id
 
                         f.write(
