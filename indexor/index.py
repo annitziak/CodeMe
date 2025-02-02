@@ -26,6 +26,9 @@ class Index(IndexBase):
     def get_term(self, term: str, positions=False) -> Term:
         return self.index.get_term(term, positions=positions)
 
+    def get_term_by_prefix(self, prefix: str) -> list[str]:
+        return self.index.get_term_by_prefix(prefix)
+
     def get_document_frequency(self, term: str) -> int:
         return self.index.get_document_frequency(term)
 
@@ -85,35 +88,39 @@ if __name__ == "__main__":
 
     while True:
         term = input(
-            "Enter a term to look up (Press q to quit) or a query decided by the first two characters 'BB': "
+            "Enter a term to look up (Press q to quit) or a query decided by the first two characters 'BB'; use 'P' to search by prefix:"
         )
         start = time.time()
         try:
-            if len(term) > 2:
-                if term[:2] == "BB":
-                    terms = term.split(" ")[1:]
-                    if len(terms) == 1 and terms[0][0] == "!":
-                        term_obj = index.get_complement(terms[1])
-                        print(f"Time taken for get_complement: {time.time() - start}")
-                        print(term_obj)
-                    elif len(terms) == 3 and terms[1] == "<I>":
-                        term_obj = index.get_intersection([terms[0], terms[2]])
-                        print(f"Time taken for get_intersection: {time.time() - start}")
-                        print(term_obj)
-                    elif len(terms) == 3 and terms[1] == "<U>":
-                        term_obj = index.get_union([terms[0], terms[2]])
-                        print(f"Time taken for get_union: {time.time() - start}")
-                        print(term_obj)
-                    else:
-                        print(f"Invalid query: {terms}")
+            if term[:2] == "BB":
+                terms = term.split(" ")[1:]
+                if len(terms) == 1 and terms[0][0] == "!":
+                    term_obj = index.get_complement(terms[1:])
+                    print(f"Time taken for get_complement: {time.time() - start}")
+                    print(term_obj)
+                elif len(terms) == 3 and terms[1] == "<I>":
+                    term_obj = index.get_intersection([terms[0], terms[2]])
+                    print(f"Time taken for get_intersection: {time.time() - start}")
+                    print(term_obj)
+                elif len(terms) == 3 and terms[1] == "<U>":
+                    term_obj = index.get_union([terms[0], terms[2]])
+                    print(f"Time taken for get_union: {time.time() - start}")
+                    print(term_obj)
                 else:
-                    term_obj = index.get_term(term, positions=False)
-                    print(f"Time taken for get_term: {time.time() - start}")
-                    print(term_obj)
+                    print(f"Invalid query: {terms}")
+            elif term[:1] == "P":
+                prefix = term.split(" ")[1]
+                term_obj = index.get_term_by_prefix(prefix)
+                print(f"Time taken for get_term_by_prefix: {time.time() - start}")
+                print(term_obj)
+            else:
+                term_obj = index.get_term(term, positions=False)
+                print(f"Time taken for get_term: {time.time() - start}")
+                print(term_obj)
 
-                    term_obj = index.get_posting_list(term, 15198967)
-                    print(f"Time taken for get_posting_list: {time.time() - start}")
-                    print(term_obj)
+                term_obj = index.get_posting_list(term, 15198967)
+                print(f"Time taken for get_posting_list: {time.time() - start}")
+                print(term_obj)
         except ValueError as e:
             logger.error(e)
             continue

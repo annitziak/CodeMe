@@ -36,7 +36,8 @@ class Term:
 
     def __str__(self):
         posting_list = [x for x in self.posting_lists if x is not None][:10]
-        posting_list[-1] = "..."
+        if len(self.posting_lists) > 10:
+            posting_list[-1] = "..."
         str_posting_list = pprint.pformat(posting_list)
 
         return f"{self.term}({self.document_frequency},{str_posting_list})"

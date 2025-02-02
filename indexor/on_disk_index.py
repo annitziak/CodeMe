@@ -80,7 +80,9 @@ class ShardWorker:
         for item in self.positions_mmaps.values():
             item.close()
 
-    def _get_term(self, term: str, shard: int, offset: int, positions=False):
+    def _get_term(
+        self, term: str, shard: int, offset: int, positions=False, limit=100_000
+    ):
         start = time.time()
 
         mmaps = self.positions_mmaps if positions else self.postings_mmaps
@@ -98,6 +100,9 @@ class ShardWorker:
         all_positions = []
 
         for _ in range(postings_count):
+            if len(doc_ids) >= limit:
+                break
+
             delta, term_frequency = struct.unpack(
                 SIZE_KEY["deltaTF"],
                 mmap.read(READ_SIZE_KEY[SIZE_KEY["deltaTF"]]),
@@ -301,7 +306,7 @@ class OnDiskIndex(IndexBase):
 
         return term
 
-    def get_term(self, term: str, positions=False) -> Term:
+    def get_term(self, term: str, limit=100_000, positions=False) -> Term:
         """
         Get a term from the index
         Args:
@@ -315,7 +320,7 @@ class OnDiskIndex(IndexBase):
         _start = time.time()
         for shard, offset in self._read_fst(fst, term):
             future = self.worker_pool.submit(
-                worker_get_term, term, shard, offset, positions
+                worker_get_term, term, shard, offset, positions, limit
             )
             results.append(future)
 
@@ -327,6 +332,19 @@ class OnDiskIndex(IndexBase):
         logger.info(f"GET TERM: time taken: {time.time() - start}")
 
         return ret_term
+
+    def get_term_by_prefix(self, prefix: str, positions=False) -> Term:
+        """
+        Get all terms that have the given prefix
+        Args:
+            prefix (str): The prefix to search for
+            positions (bool): Whether to include positions in the term object
+        """
+        start = time.time()
+        fst = self.pos_term_fst if positions else self.term_fst
+        terms = list(fst.keys(prefix))
+
+        return self.get_union(terms)
 
     def __del__(self):
         self.worker_pool.shutdown()
