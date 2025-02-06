@@ -2,9 +2,16 @@ from data_loaders import Index
 from retrieval_functions import retrieval_function
 from collections import Counter
 import math
+import torch
+from transformers import AutoTokenizer, AutoModel
 import numpy as np
+from sklearn.cluster import DBSCAN
+from sklearn.metrics import silhouette_score, davies_bouldin_score
+from sklearn.preprocessing import normalize
 
-# Clarity Score which measures how focused the retrieved documents are compared to the overall collection (corpus) - A high Clarity Score means your search engine is pulling together results that are highly focused and distinct from the overall corpus.
+
+# Clarity Score which measures how focused the retrieved documents are compared to the overall collection (corpus) 
+# A high Clarity Score means your search engine is pulling together results that are highly focused and distinct from the overall corpus.
 def compute_clarity_score(retrieved_docs, corpus_vocab):
     """
     Compute Clarity Score for a set of retrieved documents.
@@ -49,88 +56,61 @@ def compute_collection_overlap(query_tokens, retrieved_docs):
     overlap = len(set(query_tokens) & retrieved_vocab) / len(query_tokens)
     return overlap
 
-# nDCG (this is supervised!!!!- If you want to include ranking evaluation like nDCG, you’ll need to simulate relevance scores or generate them using LLMs. (is it worth it ?)
-def compute_ndcg(retrieved_docs, engagement_data, k=10):
+# novel method: thinking -> cluster the retrieved documents into clusters to see if they are close together?
+# potentially find outliers or documents that are not relevant to the query 
+def compute_clustering_score_bm25_dbscan(retrieved_docs, eps=0.5, min_samples=2):
     """
-    Compute nDCG for a ranked list of documents.
+    Computes clustering scores for retrieved documents using DBSCAN. 
+    We want high silhouette score and low davies bouldin score?
+    Can experiment with different methods.
+
     Args:
-        retrieved_docs (list): Ranked list of document IDs.
-        engagement_data (dict): Dictionary with document IDs as keys and engagement scores as values.
-        k (int): Rank cutoff for nDCG.
+        retrieved_docs: List of retrieved document texts.
+        eps (float): Maximum distance between two samples for them to be considered part of cluster. This may needs some finetuning
+        min_samples (int): Minimum number of samples required to form a dense region. Also needs finetuning
+
     Returns:
-        float: nDCG score.
+        dict: Clustering scores and number of clusters.
     """
-    def dcg(scores):
-        # Compute Discounted Cumulative Gain
-        return sum((2**rel - 1) / math.log2(idx + 2) for idx, rel in enumerate(scores))
 
-    # Get relevance scores for the retrieved documents
-    relevance_scores = [engagement_data.get(doc, 0) for doc in retrieved_docs[:k]]
-    
-    # Sort the relevance scores to compute the ideal ranking
-    ideal_scores = sorted(relevance_scores, reverse=True)
-    
-    # Compute nDCG by normalizing DCG with the ideal DCG
-    return dcg(relevance_scores) / (dcg(ideal_scores) + 1e-12)
+    if len(retrieved_docs) < 2:
+        raise ValueError("At least two retrieved documents are required for clustering.")
 
-# Other metrics suggested, but not quite sure if useful in our case? Will look more into it
+    # Load CodeBERT tokenizer and model
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
+    model = AutoModel.from_pretrained("microsoft/codebert-base")
 
+    # Generate embeddings
+    def get_embedding(text):
+        inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        with torch.no_grad():
+            outputs = model(**inputs)
+        return outputs.last_hidden_state[:, 0, :].squeeze().numpy()  # CLS token representation
 
-# Mean Reciprocal Rank (needs labelled data)- is a ranking quality metric. Evaluates how quickly a ranking system can show the first relevant item in the top-K results
-# Coverage- the proportion of relevant documents within a collection that are retrieved by a search query
+    doc_vectors = np.array([get_embedding(doc) for doc in retrieved_docs])
 
-# Evaluate Retrieval Models
-def evaluate(query, index, embedding_model=None, expansion=False, engagement_data=None):
-    """
-    Evaluate the retrieval models on a single query.
-    Args:
-        query (str): User query.
-        index (Index): Inverted index.
-        embedding_model (EmbeddingModel): Optional embedding model for query expansion.
-        expansion (bool): Whether to use query expansion.
-        engagement_data (dict): Optional engagement data for weak supervision.
-    """
-    # Retrieve documents using the specified retrieval function
-    results = retrieval_function(query, index, embedding_model, expansion)
-    
-    # Build the corpus vocabulary by aggregating term frequencies across all documents
-    corpus_vocab = Counter()
-    for term, data in index.inverted_index_positions.items():
-        for _, positions in data['doc_info']:
-            corpus_vocab[term] += len(positions)
-    
-    # Extract retrieved documents (top-ranked ones)
-    retrieved_docs = [doc for doc, _ in results["without_expansion"]]
-    top_docs = retrieved_docs[:10]  # Consider only the top 10 documents for evaluation
-    
-    # Tokenize the content of the top documents for metrics calculation
-    tokenized_docs = [index.inverted_index_positions[doc]['doc_info'] for doc in top_docs]
-    
-    # Calculate metrics
-    query_tokens = query.lower().split()  # Tokenize the query
-    clarity = compute_clarity_score(tokenized_docs, corpus_vocab)  # Clarity Score
-    overlap = compute_collection_overlap(query_tokens, tokenized_docs)  # Collection Overlap
-    ndcg = compute_ndcg(retrieved_docs, engagement_data) if engagement_data else None  # nDCG (optional)
+    # Normalize embeddings for better clustering
+    doc_vectors = normalize(doc_vectors)
 
-    # Print results
-    print(f"Query: {query}")
-    print(f"Clarity Score: {clarity:.4f}")
-    print(f"Collection Overlap: {overlap:.4f}")
-    if ndcg is not None:
-        print(f"nDCG: {ndcg:.4f}")
+    # Apply DBSCAN clustering
+    dbscan = DBSCAN(eps=eps, min_samples=min_samples, metric='cosine')
+    labels = dbscan.fit_predict(doc_vectors)
 
-# Example Usage
-if __name__ == "__main__":
-    # Initialize the inverted index
-    index = Index()
-    
-    # Define a sample query and engagement data
-    sample_query = "How to write a Python web scraper"
-    engagement_data = {
-        "doc1": 10,  # Example engagement scores for documents
-        "doc2": 5,
-        "doc3": 2,
+    # Count the number of clusters (excluding noise points labeled as -1)
+    num_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+
+    # Compute clustering evaluation metrics (only if there are actual clusters)
+    if num_clusters > 1:
+        silhouette = silhouette_score(doc_vectors, labels, metric='cosine')
+        davies_bouldin = davies_bouldin_score(doc_vectors, labels)
+    else:
+        silhouette = None  # Not meaningful with one cluster
+        davies_bouldin = None
+
+    return {
+        "num_clusters": num_clusters,
+        "silhouette_score": silhouette,  # Higher means better clustering (range: -1 to 1)
+        "davies_bouldin_score": davies_bouldin,  # Lower means better clustering
+        "labels": labels.tolist()  # Cluster assignments for each document
     }
-    
-    # Evaluate the query using the retrieval models
-    evaluate(sample_query, index, expansion=True, engagement_data=engagement_data)
+
