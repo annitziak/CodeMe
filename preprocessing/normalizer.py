@@ -1,9 +1,9 @@
 import os
-import unicodedata
 import Stemmer
 
 from abc import ABC, abstractmethod
 from preprocessing import Term
+from unidecode import unidecode
 
 
 class SubNormalizer(ABC):
@@ -62,14 +62,14 @@ class StemmingNormalizer(SubNormalizer):
         term.term = self.stemmer.stemWord(term.term)
 
 
-class NfdNormalizer(SubNormalizer):
+class UnicodeToAsciiNormalizer(SubNormalizer):
     """
     Normalizes the term to Normal Form such that it is decomposed into its base
     Removes accents and other diacritics
     """
 
     def normalize_term(self, term: Term):
-        term.term = unicodedata.normalize("NFD", term.term)
+        term.term = unidecode(term.term)
 
 
 class Normalizer:

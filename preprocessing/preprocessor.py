@@ -8,7 +8,7 @@ from preprocessing.normalizer import (
     StopWordNormalizer,
     StemmingNormalizer,
     LowerCaseNormalizer,
-    NfdNormalizer,
+    UnicodeToAsciiNormalizer,
 )
 
 logging.basicConfig(
@@ -37,15 +37,15 @@ class Preprocessor:
                 LowerCaseNormalizer(),
                 StopWordNormalizer(stop_words_file="preprocessing/stop_words.txt"),
                 StemmingNormalizer(),
-                NfdNormalizer(),
+                UnicodeToAsciiNormalizer(),
             ],
             "code_normalizer_operations": [
-                # LowerCaseNormalizer(),
-                # NfdNormalizer(),
+                LowerCaseNormalizer(),
+                UnicodeToAsciiNormalizer(),
             ],
             "link_normalizer_operations": [
-                # LowerCaseNormalizer(),
-                # NfdNormalizer(),
+                LowerCaseNormalizer(),
+                UnicodeToAsciiNormalizer(),
             ],
         },
     ):
@@ -111,22 +111,12 @@ if __name__ == "__main__":
                     break
     else:
         test_htmls = [
-            """
-                <html><body>
-                <p>A tokenization(erroneous) test for lots of people. It's a test of high-quality stuff.</p>
-                </body></html>
-                """,
-            """
-        <html>
-        <p>This is a piece of text with <strong>typing</strong> but also tailing text. And then some extra <strong>text</strong> for laughs.</p>
-        </html>
-        """,
-            """<html>\n  <body><p>You should implement <a href="https://api.drupal.org/api/drupal/modules%21node%21node.api.php/function/hook_node_presave/7" rel="nofollow"><code>hook_node_presave</code></a> to set the values you need to change there.</p>\n\n<p>Code sample:</p>\n\n<pre><code>function MODULE_node_presave($node) {\n    if($node-&gt;type === \'MY_NODE_TYPE\') \n        $node-&gt;uid = 1;\n}\n</code></pre>\n</body>\n</html>\n""",
+            """<html>\n  <body><p>You àb̰àappleàb̰ should implement <a href="https://api.drupal.org/api/drupal/modules%21node%21node.api.php/function/hook_node_presave/7" rel="nofollow"><code>hook_node_presave</code></a> to set the values you need to change there.</p>\n\n<p>Code sample:</p>\n\n<pre><code>function MODULE_node_presave($node) {\n    if($node-&gt;type === \'MY_NODE_TYPE\') \n        $node-&gt;uid = 1;\n}\n</code></pre>\n</body>\n</html>\n""",
             """
             <html><body>
             <p><strong>Program Description:</strong> </p>                                                                                                                                                                                                                                                                                                                                               <p>I am writing a Java program which initial current directory is /home/user/Desktop. I want to run a bash command "du -s" in "location /home/user/project/" for finding the size of that folder so that I can to use the size of the folder in my project. I cannot post the entire code as it is having some sensitive data. I am just posting the code which is needed.</p>                                                                                                                                                                                                            <p><strong>Here is what I have done:-</strong> </p>
 
-<pre><code>import java.io.*;                                                                                                                                                                  import java.io.BufferedReader;                                                                                                                                                                import java.io.IOException;                                                                                                                                                                   import java.io.InputStream;                                                                                                                                                                   import java.io.InputStreamReader;                                                                                                                                                             import java.io.File;
+<pre><code>import java.io.*;                                                                                                                                                                  import java.io.BufferedReader;  àpleb̰                                                                                                                                                              import java.io.IOException;                                                                                                                                                                   import java.io.InputStream;                                                                                                                                                                   import java.io.InputStreamReader;                                                                                                                                                             import java.io.File;
 
             public class Exec_in_cur_dir {
     public static void main(String[] args) {                                                                                                                                                          try {
