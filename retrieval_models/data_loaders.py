@@ -42,7 +42,7 @@ class Index:
                         try:
                             self.inverted_index_positions[current_term] = {'df': int(df.strip()), 'doc_info': []}
                         except ValueError:
-                            print(f"Skipping invalid term line: {line}")
+                            #print(f"Skipping invalid term line: {line}")
                             current_term = None
                 elif current_term:  # doc info 
                     # check if valid
