@@ -1,5 +1,3 @@
-from data_loaders import Index
-from retrieval_functions import retrieval_function
 from collections import Counter
 import math
 import torch

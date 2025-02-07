@@ -1,30 +1,57 @@
-
-#make embeddings for the vocabulary
-from transformers import AutoTokenizer, AutoModel
 import torch
 import numpy as np
+import pickle
+import os
+import tqdm
+from transformers import AutoTokenizer, AutoModel
 from sklearn.metrics.pairwise import cosine_similarity
-from tqdm import tqdm  # For progress visualization
-
-from data_loaders import *
 
 class EmbeddingModel:
-    def __init__(self, vocab:list, model_name="microsoft/codebert-base"):
+    def __init__(self, vocab: list, model_name="microsoft/codebert-base", save_path="retrieval_models/data/vocab_embeddings.pkl"):
         """
         Initialize the EmbeddingModel with the specified vocabulary and model.
         Args:
             vocab (list or set): A list or set of vocabulary words.
             model_name (str): The name of the pretrained model to load.
+            save_path (str): Path to save/load precomputed embeddings.
         """
-        # Initialize and load tokenizer and model
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModel.from_pretrained(model_name)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = self.model.to(self.device)
-        self.vocab = vocab  # Store vocab as a list for processing
+        self.vocab = list(vocab)  # convert to list
+        self.save_path = save_path
+        self.embeddings = None  # placeholder
+        self.word_to_index = {}  # mapping 
 
-        #precompute embeddings for the vocabulary in batches
-        self.embeddings = self.precompute_vocab_embeddings(batch_size = 100)
+        os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
+
+        # Load or compute embeddings
+        if os.path.exists(self.save_path):
+            print(f"Loading embeddings from {self.save_path}...")
+            with open(self.save_path, "rb") as f:
+                self.embeddings, self.word_to_index = pickle.load(f)
+        else:
+            print("Precomputing embeddings...")
+            self.embeddings = self.precompute_vocab_embeddings(batch_size=100)
+            self.save_embeddings()
+
+    def save_embeddings(self):
+        """ Saves the precomputed embeddings and word-to-index mapping to a .pkl file. """
+        self.word_to_index = {word: i for i, word in enumerate(self.vocab)}  # Create lookup dictionary
+
+        try:
+            with open(self.save_path, "wb") as f:
+                pickle.dump((self.embeddings, self.word_to_index), f)
+            print(f"✅ Embeddings successfully saved to {self.save_path}")
+        except Exception as e:
+            print(f"❌ Error saving embeddings: {e}")
+
+        # Check if file exists after saving
+        if os.path.exists(self.save_path):
+            print(f"🔍 File confirmed at {self.save_path}")
+        else:
+            print("⚠ Warning: File was not created!")
 
 
     def get_embeddings_batch(self, words):
@@ -35,11 +62,9 @@ class EmbeddingModel:
         Returns:
             np.ndarray: A 2D array of embeddings for the input words.
         """
-        # Tokenize the input words
         inputs = self.tokenizer(words, return_tensors="pt", padding=True, truncation=True).to(self.device)
         with torch.no_grad():
             outputs = self.model(**inputs)
-        # Return the mean-pooled embeddings
         return outputs.last_hidden_state.mean(dim=1).cpu().numpy()
 
     def precompute_vocab_embeddings(self, batch_size=50):
@@ -49,12 +74,11 @@ class EmbeddingModel:
             batch_size (int): The size of each batch for processing.
         Returns:
             np.ndarray: A 2D array of word embeddings.
-            list: A list of words corresponding to the embeddings.
         """
         embeddings = []
         total_words = len(self.vocab)
 
-        for i in tqdm(range(0, total_words, batch_size), desc="Processing batches"):
+        for i in tqdm.tqdm(range(0, total_words, batch_size), desc="Processing batches"):
             batch_words = self.vocab[i:i + batch_size]
             try:
                 batch_embeddings = self.get_embeddings_batch(batch_words)
@@ -63,35 +87,34 @@ class EmbeddingModel:
                 print(f"Failed to compute embeddings for batch: {batch_words}, error: {e}")
 
         return np.vstack(embeddings)
-    
+
     def get_embedding(self, word):
         """
-        Computes the embedding for a single word.
+        Retrieves the embedding for a single word from the precomputed embeddings.
+        If the word is not in the vocabulary, it computes it on the fly.
+        
         Args:
             word (str): The input word.
         Returns:
             np.ndarray: The embedding of the input word.
         """
-        embedding = self.get_embeddings_batch([word])
-        return embedding
+        if word in self.word_to_index:
+            return self.embeddings[self.word_to_index[word]]  # Retrieve from precomputed embeddings
+        else:
+            print(f"Word '{word}' not found in precomputed embeddings. Computing on the fly?...")
+            return self.get_embeddings_batch([word])[0]  # Compute dynamically
 
     def find_similar_words(self, word, top_k=5):
         """
-        Finds the top_k most similar words to the given word using cosine similarity
+        Finds the top_k most similar words to the given word using cosine similarity.
+        
         Args:
             word (str): The target word.
-            vocab_embeddings (np.ndarray): The precomputed embeddings of the vocabulary.
-            word_list (list): The vocabulary list corresponding to the embeddings.
             top_k (int): The number of similar words to return.
         Returns:
-            list: A list of tuples containing similar words and their cosine similarities.
+            list: A list of words most similar to the input word.
         """
-        target_embedding = self.get_embedding(word)
-        # Compute cosine similarity in a vectorized manner
+        target_embedding = self.get_embedding(word).reshape(1, -1)  # Ensure correct shape
         similarities = cosine_similarity(target_embedding, self.embeddings)[0]
-        # Get the top_k most similar words
         top_indices = np.argsort(similarities)[::-1][:top_k]
-
-        #return the top similar words
         return [self.vocab[i] for i in top_indices]
-

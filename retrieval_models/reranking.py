@@ -5,39 +5,44 @@ from datetime import datetime
 from sklearn.preprocessing import MinMaxScaler
 
 class Reranker:
-    def __init__(self, retrieved_documents):
-        self.retrieved_documents = retrieved_documents
+    def __init__(self):
         self.metadata = None
         self.load()
 
     def load(self):
         #temporary
-        metadata = pd.read_csv("data/metadata_processed.csv")
-        self.metadata = metadata[metadata["id"].isin(self.retrieved_documents)]
-    
-    def rerank(self):
+        self.metadata = pd.read_csv("data/metadata_processed.csv")
+
+    def rerank(self, retrieved_documents):
         # rerank the retrieved documents based on metadata
         # this will change but we can do some testing for now
+        
+        # only get useful docs
+        metadata_df = self.metadata[self.metadata["id"].isin(retrieved_documents)].copy()
 
+        if metadata_df.empty:
+            print("⚠ Warning: No retrieved documents found in metadata.")
+            return retrieved_documents
+
+        # Features for ranking
         features = ["score", "viewcount", "favoritecount", "commentcount", "reputation_user", "days_since_creation"]
 
-        # between 0 and 1
+        # Normalize features
         scaler = MinMaxScaler()
-        self.metadata[features] = scaler.fit_transform(self.metadata[features])
+        metadata_df[features] = scaler.fit_transform(metadata_df[features])
 
-        # Compute ranking score with weighted factors
-        self.metadata["ranking_score"] = (
-            (self.metadata["score"] * 1.5) +  # Strong weight on upvotes
-            (self.metadata["viewcount"]) +  # Normalize view counts
-            (self.metadata["favoritecount"] * 1 ) +  # Prioritize favorited posts
-            (self.metadata["commentcount"] * 1.5) +  # Active discussions indicate usefulness
-            (self.metadata["reputation_user"] * 1.5) +  # Normalize reputation for fair scaling
-            (self.metadata["days_since_creation"] * 2)  # Boost newer documents
+        # Compute ranking score
+        metadata_df["ranking_score"] = (
+            (metadata_df["score"] * 1.5) +  # Strong weight on upvotes
+            (metadata_df["viewcount"] * 1) +  # Normalize view counts
+            (metadata_df["favoritecount"] * 1) +  # Prioritize favorited posts
+            (metadata_df["commentcount"] * 1.5) +  # Active discussions indicate usefulness
+            (metadata_df["reputation_user"] * 1.5) +  # Normalize reputation for fair scaling
+            (metadata_df["days_since_creation"] * 2)  # Boost newer documents
         )
 
-        # Sort documents by ranking score in descending order
-        self.metadata = self.metadata.sort_values(by="ranking_score", ascending=False)
+        # Sort by ranking score (descending order)
+        ranked_documents = metadata_df.sort_values(by="ranking_score", ascending=False)["id"].tolist()
 
-        return self.metadata["id"].tolist()
-
+        return ranked_documents
 #will give list and will rerank the top based on metadata

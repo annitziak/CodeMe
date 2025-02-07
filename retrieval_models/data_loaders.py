@@ -1,3 +1,7 @@
+
+import os
+
+
 class Index:
     def __init__(self, inverted_index_positions=None, vocab=None, doc_lengths=None)->None:
         """
@@ -20,7 +24,9 @@ class Index:
         """
         Load the inverted index from the index.txt file (temporary solution)
         """
-        with open("data/index.txt", 'r', encoding='utf-8', errors='replace') as file:
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Get the directory of this script
+        index_path = os.path.join(BASE_DIR, "data", "index.txt")
+        with open(index_path, 'r', encoding='utf-8', errors='replace') as file:
             current_term = None
             for line in file:
                 line = line.rstrip()  # remove trailing space
@@ -59,7 +65,21 @@ class Index:
         """
         Load the document lengths from the doc_metadata.txt file (temporary solution)
         """
-        with open("data/doc_metadata.txt", 'r', encoding='utf-8', errors='replace') as file:
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))  
+
+        # Construct the correct path to doc_metadata.txt
+        metadata_path = os.path.join(BASE_DIR, "data", "doc_metadata.txt")
+        print(metadata_path)
+
+        # Open the file safely
+        with open(metadata_path, 'r', encoding='utf-8', errors='replace') as file:
             for line in file:
                 docno, length = line.split(":")
                 self.doc_lengths[docno] = int(length)
+            
+    def get_index(self):
+        """Returns the inverted index as a dictionary."""
+        return self.inverted_index_positions
+
+
+    
