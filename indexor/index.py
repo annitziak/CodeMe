@@ -53,6 +53,9 @@ class Index(IndexBase):
     def get_complement(self, term: str) -> list[int]:
         return self.index.get_complement(term)
 
+    def write_index_to_txt(self, path: str):
+        self.index.write_index(path)
+
 
 if __name__ == "__main__":
     import argparse
@@ -114,7 +117,7 @@ if __name__ == "__main__":
                 print(f"Time taken for get_term_by_prefix: {time.time() - start}")
                 print(term_obj)
             else:
-                term_obj = index.get_term(term, positions=True)
+                term_obj = index.get_term(term, positions=False)
                 print(f"Time taken for get_term: {time.time() - start}")
                 print(term_obj)
 

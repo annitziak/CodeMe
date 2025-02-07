@@ -214,6 +214,7 @@ class DocumentShardedIndexBuilder:
             self.index_path, f"{shard_filename}_{shard_str}.index"
         )
         offset_dict = OrderedDict()
+        position_offset_dict = OrderedDict()
 
         logger.info(
             f"Flushing shard {shard_str} with {len(self.term_map)} terms to {shard_path}. Documents processed: {self.current_docs} in {time.time()-self.start}. Min doc ID: {self.min_doc_id}. Max doc ID: {self.max_doc_id}"

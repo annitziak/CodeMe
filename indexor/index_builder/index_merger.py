@@ -309,8 +309,8 @@ class IndexMerger:
                 while heap:
                     term, offset, reader = heapq.heappop(heap)
 
-                    assert term not in term_offsets
-                    term_offsets[term] = (shard, postings_f.tell())
+                    assert (term, shard) not in term_offsets
+                    term_offsets[(term, shard)] = (shard, postings_f.tell())
 
                     all_postings = reader.read_postings(
                         offset, read_positions=merge_positions
@@ -393,7 +393,11 @@ class IndexMerger:
         logger.info(f"Merged {shard_filename} {shard} to {postings_file}")
 
     def _build_term_fst(
-        self, term_offsets, save_filename="terms", load_filename="terms"
+        self,
+        term_offsets,
+        save_filename="terms",
+        load_filename="terms",
+        shard=-1,
     ):
         """
         Builds the FST for the terms and saves as `terms.fst` or `pos_terms.fst`
@@ -406,11 +410,16 @@ class IndexMerger:
             fst = marisa_trie.BytesTrie()
             fst.load(os.path.join(self.output_dir, f"{load_filename}.fst"))
             logger.info(f"Loaded {load_filename}.fst")
-            items = [(term, value) for term, values in fst.items() for value in values]
-        else:
-            items = []
 
-        for term, (shard, offset) in term_offsets.items():
+            for term, values in fst.items():
+                for value in values:
+                    if (term, shard) in term_offsets:
+                        continue
+
+                    term_offsets[(term, shard)] = (-1, value)
+
+        items = []
+        for (term, shard), (_, offset) in term_offsets.items():
             if shard == -1:
                 offset_encoding = struct.pack(SIZE_KEY["offset"], offset)
                 value = (term, offset_encoding)
@@ -426,7 +435,7 @@ class IndexMerger:
 
     def _write_merged_offset(self, f, term_offsets, shard):
         logger.info(f"Writing offsets for shard {shard}")
-        for term, (_, offset) in term_offsets.items():
+        for (term, _), (_, offset) in term_offsets.items():
             term_bytes = term.encode("utf-8")
             f.write(struct.pack(SIZE_KEY["term_bytes"], len(term_bytes)))
             f.write(term_bytes)

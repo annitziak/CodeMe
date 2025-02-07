@@ -7,55 +7,142 @@ import json
 import glob
 import time
 import logging
+import psutil
 
 from concurrent.futures import ProcessPoolExecutor
 
 from indexor.structures import Term, PostingList, IndexBase
 from indexor.index_builder.constants import SIZE_KEY, READ_SIZE_KEY
 
+logging.basicConfig(
+    format=f"%(asctime)s - %(name)s - {os.getpid()} - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 
-def _load_mmaps(
-    load_path: str = "", shard: int = -1, is_sharded: bool = False
-) -> tuple[dict[int, mmap.mmap], dict[int, mmap.mmap]]:
-    postings = glob.glob(os.path.join(load_path, "shard_*.index"))
-    positions = glob.glob(os.path.join(load_path, "pos_shard_*.index"))
+class MMappedFile:
+    def __init__(self, path: str):
+        self.path = path
+        self.data = None
 
-    postings_mmaps: dict[int, mmap.mmap] = {}
-    positions_mmaps: dict[int, mmap.mmap] = {}
-    if is_sharded:
-        for file in postings:
+    def load(self):
+        with open(self.path, "rb") as f:
+            self.data = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+
+        return self
+
+    def seek(self, position: int):
+        if self.data is None:
+            raise ValueError("File not loaded")
+
+        self.data.seek(position)
+
+    def read(self, size: int):
+        if self.data is None:
+            raise ValueError("File not loaded")
+
+        return self.data.read(size)
+
+
+class InMemoryFile:
+    def __init__(self, path: str):
+        self.path = path
+        self.data = None
+
+        self.position = 0
+
+    def load(self):
+        with open(self.path, "rb") as f:
+            self.data = f.read()
+
+        return self
+
+    def seek(self, position: int):
+        self.position = position
+
+    def read(self, size: int):
+        if self.data is None:
+            raise ValueError("File not loaded")
+
+        return self.data[self.position : self.position + size]
+
+    def close(self):
+        self.data = None
+
+
+class MMappedReader:
+    def __init__(
+        self,
+        path: str,
+        glob_pattern="*",
+        keep_in_memory: bool = False,
+        is_sharded: bool = False,
+        max_size=1024 * 1024 * 1024 * 3,
+    ):
+        self.path = path
+        self.glob_pattern = os.path.join(self.path, glob_pattern)
+        self.files = {}
+
+        self.keep_in_memory = keep_in_memory
+        self.is_sharded = is_sharded
+        self.max_size = max_size
+
+    def __del__(self):
+        for item in self.files.values():
+            item.close()
+
+    def __getitem__(self, key):
+        if key not in self.files:
+            raise ValueError(f"{os.getpid()} Shard {key} not found in {self.files}")
+
+        return self.files[key]
+
+    def load(self, shard=-1):
+        logger.info(f"Loading shard {shard} from {self.glob_pattern}")
+        if shard in self.files:
+            return self
+
+        for file in glob.glob(self.glob_pattern):
             if shard != -1 and f"shard_{shard}" not in file:
                 continue
 
-            with open(file, "rb") as f:
-                filename = os.path.basename(file)
-                if filename.count("_") > 1:
-                    continue
-
+            filename = os.path.basename(file)
+            shard_no = -1
+            if self.is_sharded:
                 shard_no = int(filename.split("_")[-1].split(".")[0])
-                postings_mmaps[shard_no] = mmap.mmap(
-                    f.fileno(), 0, access=mmap.ACCESS_READ
-                )
 
-        for file in positions:
-            if shard != -1 and f"shard_{shard}" not in file:
-                continue
+            if self._is_space_available(file) and self.keep_in_memory:
+                logger.info(f"Loading {file} into memory")
+                self.files[shard_no] = InMemoryFile(file).load()
+            else:
+                logger.info(f"Loading {file} into mmap")
+                self.files[shard_no] = MMappedFile(file).load()
 
-            with open(file, "rb") as f:
-                shard_no = int(file.split("_")[-1].split(".")[0])
-                positions_mmaps[shard_no] = mmap.mmap(
-                    f.fileno(), 0, access=mmap.ACCESS_READ
-                )
-    else:
-        with open(os.path.join(load_path, "postings.bin"), "rb") as f:
-            postings_mmaps[-1] = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            logger.info(f"{os.getpid()} Loaded {file} in {self.files}")
 
-        with open(os.path.join(load_path, "positions.bin"), "rb") as f:
-            positions_mmaps[-1] = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        return self
 
-    return postings_mmaps, positions_mmaps
+    def seek(self, shard: int, position: int):
+        if shard not in self.files:
+            raise ValueError(f"Shard {shard} not found")
+
+        self.files[shard].seek(position)
+
+    def read(self, shard: int = -1, size: int = 0):
+        if shard not in self.files:
+            raise ValueError(f"Shard {shard} not found")
+
+        if size == 0:
+            return self.files[shard].data
+
+        return self.files[shard].read(size)
+
+    def _is_space_available(self, filename):
+        file_size = os.path.getsize(filename)
+        available_memory = psutil.virtual_memory().available
+        available_memory = min(available_memory, self.max_size)
+
+        return file_size < available_memory
 
 
 def _load_doc_id_bounds(load_path: str = ""):
@@ -65,20 +152,45 @@ def _load_doc_id_bounds(load_path: str = ""):
     return doc_id_bounds
 
 
+class TermCache:
+    def __init__(self):
+        self.cache = OrderedDict()
+        self.freq_threshold = 10_000
+        self.max_size = 1_000_000
+
+    def get(self, term: str):
+        return self.cache.get(term, None)
+
+    def put(self, term: str, term_obj):
+        if len(self.cache) > 100:
+            self.cache.popitem(last=False)
+
+        if term_obj.document_frequency > self.freq_threshold:
+            self.cache[term] = term
+
+
 class ShardWorker:
     def __init__(self, index_path: str = "", is_sharded: bool = False):
         self.index_path = index_path
 
-        self.postings_mmaps, self.positions_mmaps = _load_mmaps(
-            index_path, is_sharded=is_sharded
+        glob_pattern_common = "shard_*.index" if is_sharded else "postings.bin"
+        glob_pattern_positions = "pos_shard_*.index" if is_sharded else "positions.bin"
+
+        self.postings_mmaps = MMappedReader(
+            index_path, glob_pattern_common, is_sharded=is_sharded
+        )
+        self.positions_mmaps = MMappedReader(
+            index_path, glob_pattern_positions, is_sharded=is_sharded
         )
         self.doc_bounds = _load_doc_id_bounds(self.index_path)
 
     def __del__(self):
-        for item in self.postings_mmaps.values():
-            item.close()
-        for item in self.positions_mmaps.values():
-            item.close()
+        self.positions_mmaps.__del__()
+        self.postings_mmaps.__del__()
+
+    def _load_files(self, shard: int):
+        self.postings_mmaps.load(shard)
+        # self.positions_mmaps.load(shard)
 
     def _get_term(
         self, term: str, shard: int, offset: int, positions=False, limit=100_000
@@ -86,7 +198,7 @@ class ShardWorker:
         start = time.time()
 
         mmaps = self.positions_mmaps if positions else self.postings_mmaps
-        mmap = mmaps[shard]
+        mmap = mmaps.load(shard)[shard]
         mmap.seek(offset)
 
         postings_count = struct.unpack(
@@ -219,6 +331,11 @@ def worker_get_union(*args, **kwargs):
     return _worker._get_union(*args, **kwargs)
 
 
+def worker_load(*args, **kwargs):
+    global _worker
+    return _worker._load_files(*args, **kwargs)
+
+
 class OnDiskIndex(IndexBase):
     """
     Stores the index on disk as a memory-mapped file.
@@ -267,9 +384,15 @@ class OnDiskIndex(IndexBase):
                 self.is_sharded,
             ),
         )
+        for shard in range(self.num_workers):
+            self.worker_pool.submit(worker_load, shard)
+
         logger.info(f"Initialized worker pool with {self.num_workers} workers")
 
         self.doc_bounds = _load_doc_id_bounds(self.load_path)
+
+        self.term_cache = TermCache()
+        self.pos_term_cache = TermCache()
 
     def _load_fst(self, filename):
         fst = marisa_trie.BytesTrie()
@@ -293,7 +416,8 @@ class OnDiskIndex(IndexBase):
                 yield shard, offset
             return
 
-        assert len(encoded) == 1, f"Term {term} not found in index"
+        unpacked = [struct.unpack(SIZE_KEY["offset"], x) for x in encoded]
+        assert len(encoded) == 1, f"Term {term} not found in index {unpacked}"
         yield -1, struct.unpack(SIZE_KEY["offset"], encoded[0])[0]
 
     def _build_term(self, term: Term, future):
@@ -313,6 +437,12 @@ class OnDiskIndex(IndexBase):
             term (str): The term to retrieve
             positions (bool): Whether to include positions in the term object
         """
+        cache = self.term_cache if not positions else self.pos_term_cache
+        cached_term = cache.get(term)
+        logger.info(f"Term {term} not found in cache")
+        if cached_term is not None:
+            return cached_term
+
         start = time.time()
         fst = self.pos_term_fst if positions else self.term_fst
 
@@ -328,7 +458,7 @@ class OnDiskIndex(IndexBase):
         for future in results:
             ret_term = self._build_term(ret_term, future)
 
-        # ret_term = Term.build_term(term, all_results, positions)
+        cache.put(term, ret_term)
         logger.info(f"GET TERM: time taken: {time.time() - start}")
 
         return ret_term
@@ -491,3 +621,16 @@ class OnDiskIndex(IndexBase):
                 )
 
         return docs
+
+    def write_index_to_txt(self, path: str):
+        if not os.path.exists(os.path.dirname(path)):
+            logger.info(f"Creating directory {os.path.dirname(path)}")
+            os.makedirs(os.path.dirname(path))
+
+        with open(path, "w") as f:
+            for term in self.term_fst.keys():
+                if isinstance(term, bytes):
+                    term = term.decode("utf-8")
+
+                term_obj = self.get_term(term)
+                f.write(f"{term_obj}\n")

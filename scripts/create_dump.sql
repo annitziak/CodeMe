@@ -12,6 +12,7 @@ CREATE TABLE temp_posts (LIKE posts INCLUDING ALL);
 INSERT INTO temp_posts
 SELECT *
 FROM posts
+-- ORDER BY creationdate DESC
 LIMIT number_of_posts;
 -- Could limit to some `creationdate` range
 
@@ -57,6 +58,17 @@ INSERT INTO temp_badges
 SELECT b.*
 FROM badges b
 INNER JOIN temp_users u ON b.userid = u.id;
+
+ALTER TABLE temp_posts ADD FOREIGN KEY (owneruserid) REFERENCES temp_users(id);
+ALTER TABLE temp_posts ADD FOREIGN KEY (lasteditoruserid) REFERENCES temp_users(id);
+ALTER TABLE temp_posthistory ADD FOREIGN KEY (postid) REFERENCES temp_posts(id);
+ALTER TABLE temp_posthistory ADD FOREIGN KEY (userid) REFERENCES temp_users(id);
+ALTER TABLE temp_comments ADD FOREIGN KEY (postid) REFERENCES temp_posts(id);
+ALTER TABLE temp_comments ADD FOREIGN KEY (userid) REFERENCES temp_users(id);
+ALTER TABLE temp_votes ADD FOREIGN KEY (postid) REFERENCES temp_posts(id);
+ALTER TABLE temp_postlinks ADD FOREIGN KEY (postid) REFERENCES temp_posts(id);
+ALTER TABLE temp_postlinks ADD FOREIGN KEY (relatedpostid) REFERENCES temp_posts(id);
+ALTER TABLE temp_badges ADD FOREIGN KEY (userid) REFERENCES temp_users(id);
 
 
 \copy (SELECT * FROM temp_users ORDER BY id) TO output_path/users.csv WITH (FORMAT CSV, HEADER);

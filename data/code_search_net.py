@@ -20,11 +20,25 @@ class CodeSearchNetDataset(CodeDataset):
         return CodeDataset(self.dataset["train"])
 
     def __getitem__(self, idx):
-        print(self.dataset["train"][idx])
-        return self.dataset["train"][idx]["whole_func_string"]
+        if idx < len(self.dataset["train"]):
+            return self.dataset["train"][idx]["func_string"]
+        if idx < len(self.dataset["train"]) + len(self.dataset["test"]):
+            inner_idx = idx - len(self.dataset["train"])
+            return self.dataset["test"][inner_idx]["func_string"]
+        if idx < len(self.dataset["train"]) + len(self.dataset["test"]) + len(
+            self.dataset["valid"]
+        ):
+            inner_idx = idx - len(self.dataset["train"]) - len(self.dataset["test"])
+            return self.dataset["valid"][inner_idx]["func_string"]
+
+        raise IndexError("Index out of range")
 
     def __len__(self):
-        return len(self.dataset)
+        return (
+            len(self.dataset["train"])
+            + len(self.dataset["test"])
+            + len(self.dataset["valid"])
+        )
 
 
 if __name__ == "__main__":

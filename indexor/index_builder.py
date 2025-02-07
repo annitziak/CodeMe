@@ -13,7 +13,8 @@ from preprocessing.preprocessor import Preprocessor
 from utils.db_connection import DBConnection
 
 logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.DEBUG,
+    format=f"%(asctime)s - %(name)s - {os.getpid()} - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,10 @@ class IndexBuilder:
         with concurrent.futures.ProcessPoolExecutor(
             max_workers=self.num_workers,
         ) as executor:
+            index_merger = IndexMerger(self.temp_index_path)
+            index_merger.cleanup()
+            del index_merger
+
             merge_future = executor.submit(self._merge_sub_shards)
             futures = [
                 executor.submit(
@@ -166,7 +171,6 @@ class IndexBuilder:
         Also, deletes all prior shards in the index folder specified
         """
         index_merger = IndexMerger(self.temp_index_path)
-        index_merger.cleanup()
 
         value = 0
         shards_finished = os.path.join(self.index_path, "shards_finished")
@@ -396,12 +400,11 @@ if __name__ == "__main__":
     from constants import DB_PARAMS
     from indexor.index import Index
 
-    DB_PARAMS["database"] = "stack_overflow_small"
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--index-path", type=str, default=".cache/index", required=True)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=24)
+    parser.add_argument("--db-name", type=str, default="stack_overflow_10k")
     parser.add_argument(
         "--action",
         choices=["build", "merge", "build-fst"],
@@ -412,8 +415,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Should we merge the shards shard_0...shard_n to form the final index postings.bin and terms.fst",
     )
+    parser.add_argument("--write-index-to-txt", action="store_true")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
+
+    DB_PARAMS["database"] = args.db_name
 
     builder = IndexBuilder(
         DB_PARAMS,
@@ -425,14 +431,17 @@ if __name__ == "__main__":
         is_sharded=args.is_sharded,
     )
     builder.process_posts()
-
     index = Index(load_path=args.index_path)
-    print(index.get_term("!", positions=True))
-    print(index.get_term("python", positions=True))
-    print(index.get_term("java", positions=True))
-    print(index.get_term("javascript", positions=True))
+
+    if args.write_index_to_txt:
+        index.write_index_to_txt(os.path.join(args.index_path, "index.txt"))
 
     print(index.get_term("!", positions=False))
     print(index.get_term("python", positions=False))
     print(index.get_term("java", positions=False))
     print(index.get_term("javascript", positions=False))
+
+    print(index.get_term("!", positions=True))
+    print(index.get_term("python", positions=True))
+    print(index.get_term("java", positions=True))
+    print(index.get_term("javascript", positions=True))
