@@ -5,13 +5,14 @@ import heapq
 import struct
 import shutil
 import filelock
+import concurrent.futures
 import marisa_trie
 import datrie
 
 from collections import OrderedDict
 from dataclasses import dataclass
 
-from indexor.index_builder.constants import SIZE_KEY, READ_SIZE_KEY
+from indexor.index_builder.constants import SIZE_KEY
 from indexor.index_builder.shard_reader import ShardReader
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 class HeapItem:
     term: str
     offset: int
+    pos_offset: int
     reader: ShardReader
 
     def __lt__(self, other):
@@ -30,10 +32,10 @@ class HeapItem:
         return self.term > other.term
 
     def __iter__(self):
-        return iter((self.term, self.offset, self.reader))
+        return iter((self.term, self.offset, self.pos_offset, self.reader))
 
     def __getitem__(self, key):
-        return (self.term, self.offset, self.reader)[key]
+        return (self.term, self.offset, self.pos_offset, self.reader)[key]
 
 
 class IndexMerger:
@@ -108,31 +110,34 @@ class IndexMerger:
                 for i in range(shards):
                     reader = ShardReader(
                         os.path.join(self.index_path, f"{prefix}_{i}.index"),
+                        os.path.join(self.index_path, f"{prefix}_{i}.position"),
                         os.path.join(self.index_path, f"{prefix}_{i}.offset"),
                     )
                     while True:
-                        term, offset = reader.next_term()
-                        if term is None or offset is None:
+                        term, offset, pos_offset = reader.next_term()
+                        if term is None or offset is None or pos_offset is None:
                             break
 
-                        yield term, i, offset
+                        yield term, i, offset, pos_offset
 
                     reader.close()
 
                     logger.info(f"Finished reading shard {i}")
-                    yield None, None, None
+                    yield None, None, None, None
 
-            for term, shard, offset in term_offsets:
-                yield term, shard, offset
+            for term, shard, offset, pos_offset in term_offsets:
+                yield term, shard, offset, pos_offset
 
-        for term, shard, offset in gen_term_offset(term_offsets):
+        for term, shard, offset, pos_offset in gen_term_offset(term_offsets):
             if term is None or offset is None or shard is None:
                 fst = marisa_trie.BytesTrie(items)
                 fst.save(os.path.join(self.output_dir, f"{save_filename}.fst"))
                 logger.info(f"Saved {save_filename}.fst")
                 continue
 
-            encoded_value = struct.pack(SIZE_KEY["offset_shard"], shard, offset)
+            encoded_value = struct.pack(
+                SIZE_KEY["offset_shard"], shard, offset, pos_offset
+            )
             items.append((term, encoded_value))
 
         fst = marisa_trie.BytesTrie(items)
@@ -166,14 +171,6 @@ class IndexMerger:
             self._merge(
                 shard_filename="shard",
                 save_filename="postings",
-                merge_positions=False,
-                force_merge=force_merge,
-                shard=i,
-            )
-            self._merge(
-                shard_filename="pos_shard",
-                save_filename="positions",
-                merge_positions=True,
                 force_merge=force_merge,
                 shard=i,
             )
@@ -183,13 +180,6 @@ class IndexMerger:
         self._merge(
             shard_filename="shard",
             save_filename="postings",
-            merge_positions=False,
-            force_merge=True,
-        )
-        self._merge(
-            shard_filename="pos_shard",
-            save_filename="positions",
-            merge_positions=True,
             force_merge=True,
         )
 
@@ -197,7 +187,6 @@ class IndexMerger:
         self,
         shard_filename="shard",
         save_filename="postings",
-        merge_positions=False,
         force_merge=False,
         shard=-1,
     ):
@@ -210,7 +199,6 @@ class IndexMerger:
 
         `shard_filename` is the prefix of the shard files (e.g. `shard` or `pos_shard`)
         `save_filename` is the name of the output file (e.g. `postings` or `positions`)
-        `merge_positions` determines if the positional index is merged
         `force_merge` determines if the merge should occur regardless of the number of files
 
         When shard is set to -1, we merge all shards into a single index and save as `postings.bin` or `positions.bin`
@@ -234,6 +222,9 @@ class IndexMerger:
         base_shard_files = glob.glob(
             os.path.join(self.index_path, f"{shard_filename}_{shard}.index")
         )
+        base_position_files = glob.glob(
+            os.path.join(self.index_path, f"{shard_filename}_{shard}.position")
+        )
         base_offset_files = glob.glob(
             os.path.join(self.index_path, f"{shard_filename}_{shard}.offset")
         )
@@ -243,6 +234,9 @@ class IndexMerger:
         sub_shard_name = f"{shard}_*" if shard != -1 else "*"
         shard_files = glob.glob(
             os.path.join(self.index_path, f"{shard_filename}_{sub_shard_name}.index")
+        )
+        position_files = glob.glob(
+            os.path.join(self.index_path, f"{shard_filename}_{sub_shard_name}.position")
         )
         offset_files = glob.glob(
             os.path.join(self.index_path, f"{shard_filename}_{sub_shard_name}.offset")
@@ -257,6 +251,7 @@ class IndexMerger:
 
         if len(base_shard_files) > 0 and len(base_offset_files) > 0:
             shard_files.insert(0, base_shard_files[0])
+            position_files.insert(0, base_position_files[0])
             offset_files.insert(0, base_offset_files[0])
 
         def extract_shard(x):
@@ -274,15 +269,20 @@ class IndexMerger:
                 raise ValueError(f"Invalid shard file: {x} {possible_nums}")
 
         shard_files = sorted(shard_files, key=lambda x: extract_shard(x))
+        position_files = sorted(position_files, key=lambda x: extract_shard(x))
         offset_files = sorted(offset_files, key=lambda x: extract_shard(x))
 
         postings_file = os.path.join(self.output_dir, f"{save_filename}.bin")
+        positions_file = os.path.join(self.output_dir, f"{save_filename}_positions.bin")
         if shard != -1:
             # Merging sub-shards so do not save as `postings.bin`
             # Save as `shard_0.index` or `pos_shard_0.index`
             # We use a temporary file to avoid file locks with the base shard
             postings_file = os.path.join(
                 self.output_dir, f"{shard_filename}_{shard}.temp.index"
+            )
+            positions_file = os.path.join(
+                self.output_dir, f"{shard_filename}_{shard}.temp.position"
             )
 
         term_offsets = OrderedDict()
@@ -292,69 +292,82 @@ class IndexMerger:
         )
 
         lock_postings_file = filelock.FileLock(postings_file + ".lock")
+        lock_positions_file = filelock.FileLock(positions_file + ".lock")
         logger.debug(f"Locking {postings_file}")
-        with lock_postings_file:
-            with open(postings_file, "wb") as postings_f:
+        with lock_postings_file, lock_positions_file:
+            with (
+                open(postings_file, "wb") as postings_f,
+                open(positions_file, "wb") as positions_f,
+            ):
                 heap = []
 
-                for shard_file, offset_file in zip(shard_files, offset_files):
-                    reader = ShardReader(shard_file, offset_file)
-                    term, offset = reader.next_term()
-                    if term is not None and offset is not None:
-                        heap.append(HeapItem(term, offset, reader))
+                for shard_file, position_file, offset_file in zip(
+                    shard_files, position_files, offset_files
+                ):
+                    reader = ShardReader(shard_file, position_file, offset_file)
+                    items = reader.next_term()
+                    if all(x is not None for x in items):
+                        heap.append(HeapItem(*items, reader))
                     else:
                         reader.close()
 
                 heapq.heapify(heap)
                 while heap:
-                    term, offset, reader = heapq.heappop(heap)
+                    heap_item = heapq.heappop(heap)
 
-                    assert (term, shard) not in term_offsets
-                    term_offsets[(term, shard)] = (shard, postings_f.tell())
-
-                    all_postings = reader.read_postings(
-                        offset, read_positions=merge_positions
+                    assert (heap_item.term, shard) not in term_offsets
+                    term_offsets[(heap_item.term, shard)] = (
+                        shard,
+                        postings_f.tell(),
+                        positions_f.tell(),
                     )
 
-                    while heap and heap[0].term == term:
-                        _, offset, other_reader = heapq.heappop(heap)
-                        other_postings = other_reader.read_postings(
-                            offset, read_positions=merge_positions
+                    all_postings = heap_item.reader.read_postings(
+                        heap_item.offset,
+                        pos_offset=heap_item.pos_offset,
+                    )
+
+                    while heap and heap[0].term == heap_item.term:
+                        other_heap_item = heapq.heappop(heap)
+                        other_postings = other_heap_item.reader.read_postings(
+                            other_heap_item.offset,
+                            pos_offset=other_heap_item.pos_offset,
                         )
                         all_postings.extend(other_postings)
 
-                        next_term, next_offset = other_reader.next_term()
+                        items = other_heap_item.reader.next_term()
 
-                        if next_term is not None and next_offset is not None:
+                        if all(x is not None for x in items):
                             heapq.heappush(
-                                heap, HeapItem(next_term, next_offset, other_reader)
+                                heap, HeapItem(*items, other_heap_item.reader)
                             )
                         else:
-                            other_reader.close()
+                            other_heap_item.reader.close()
 
                     all_postings.sort(key=lambda x: x.doc_id)
 
                     self._write_merged_postings(
-                        postings_f, all_postings, merge_positions=merge_positions
+                        postings_f,
+                        postings=all_postings,
+                        positions_file=positions_f,
                     )
 
-                    next_term, next_offset = reader.next_term()
-                    if next_term is not None and next_offset is not None:
-                        heapq.heappush(heap, HeapItem(next_term, next_offset, reader))
+                    item = heap_item.reader.next_term()
+                    if all(x is not None for x in item):
+                        heapq.heappush(heap, HeapItem(*item, heap_item.reader))
                     else:
-                        reader.close()
+                        heap_item.reader.close()
 
         logger.debug(f"Unlocked {postings_file}")
         shutil.move(postings_file, postings_file.replace(".temp", ""))
+        shutil.move(positions_file, positions_file.replace(".temp", ""))
 
         if shard == -1:
-            fst_save_filename = "pos_terms" if merge_positions else "terms"
+            fst_save_filename = "terms"
             # Builds terms.fst with (-1, offset) i.e. shard, offset
             self._build_term_fst(term_offsets, save_filename=fst_save_filename)
         else:
-            fst_save_filename = (
-                f"pos_terms_{shard}" if merge_positions else f"terms_{shard}"
-            )
+            fst_save_filename = f"terms_{shard}"
             self._build_term_fst(term_offsets, save_filename=fst_save_filename)
 
         if shard != -1:
@@ -370,6 +383,13 @@ class IndexMerger:
 
             shutil.move(offset_filename, offset_filename.replace(".temp", ""))
 
+        self._remove_sub_shard_files(shard_files, base_shard_files, shard)
+        self._remove_sub_shard_files(position_files, base_position_files, shard)
+        self._remove_sub_shard_files(offset_files, base_offset_files, shard)
+
+        logger.info(f"Merged {shard_filename} {shard} to {postings_file}")
+
+    def _remove_sub_shard_files(self, shard_files, base_shard_files, shard=-1):
         for shard_file in shard_files:
             if (
                 len(base_shard_files) > 0
@@ -379,18 +399,6 @@ class IndexMerger:
                 continue
 
             os.remove(shard_file)
-
-        for offset_file in offset_files:
-            if (
-                len(base_offset_files) > 0
-                and offset_file == base_offset_files[0]
-                and shard != -1
-            ):
-                continue
-
-            os.remove(offset_file)
-
-        logger.info(f"Merged {shard_filename} {shard} to {postings_file}")
 
     def _build_term_fst(
         self,
@@ -412,20 +420,22 @@ class IndexMerger:
             logger.info(f"Loaded {load_filename}.fst")
 
             for term, values in fst.items():
-                for value in values:
+                for offset, pos_offset in values:
                     if (term, shard) in term_offsets:
                         continue
 
-                    term_offsets[(term, shard)] = (-1, value)
+                    term_offsets[(term, shard)] = (-1, offset, pos_offset)
 
         items = []
-        for (term, shard), (_, offset) in term_offsets.items():
+        for (term, shard), (_, offset, pos_offset) in term_offsets.items():
             if shard == -1:
-                offset_encoding = struct.pack(SIZE_KEY["offset"], offset)
+                offset_encoding = struct.pack(
+                    SIZE_KEY["pos_offset"], offset, pos_offset
+                )
                 value = (term, offset_encoding)
             else:
                 shard_offset_encoding = struct.pack(
-                    SIZE_KEY["offset_shard"], shard, offset
+                    SIZE_KEY["pos_offset_shard"], shard, offset, pos_offset
                 )
                 value = (term, shard_offset_encoding)
             items.append(value)
@@ -435,13 +445,14 @@ class IndexMerger:
 
     def _write_merged_offset(self, f, term_offsets, shard):
         logger.info(f"Writing offsets for shard {shard}")
-        for (term, _), (_, offset) in term_offsets.items():
+        for (term, _), (_, offset, pos_offset) in term_offsets.items():
             term_bytes = term.encode("utf-8")
             f.write(struct.pack(SIZE_KEY["term_bytes"], len(term_bytes)))
             f.write(term_bytes)
             f.write(struct.pack(SIZE_KEY["offset"], offset))
+            f.write(struct.pack(SIZE_KEY["offset"], pos_offset))
 
-    def _write_merged_postings(self, f, postings, merge_positions=False):
+    def _write_merged_postings(self, f, postings=[], positions_file=None):
         f.write(struct.pack(SIZE_KEY["postings_count"], len(postings)))
         prev_doc_id = 0
         for posting in postings:
@@ -458,13 +469,14 @@ class IndexMerger:
 
             prev_doc_id = posting.doc_id
 
-            if merge_positions:
-                prev_position = 0
-                filter_positions = [p for p in posting.positions if p >= 0]
-                f.write(struct.pack(SIZE_KEY["position_count"], len(filter_positions)))
+            prev_position = 0
+            filter_positions = [p for p in posting.positions if p >= 0]
+            f.write(struct.pack(SIZE_KEY["position_count"], len(filter_positions)))
+
+            if positions_file is not None:
                 for position in filter_positions:
                     delta = position - prev_position
-                    f.write(struct.pack(SIZE_KEY["position_delta"], delta))
+                    positions_file.write(struct.pack(SIZE_KEY["position_delta"], delta))
                     prev_position = position
 
     def _merge_docs(self, shard=-1, sub_shard=0, force_merge=False):
@@ -510,52 +522,43 @@ class IndexMerger:
         logger.debug(f"Unlocked {docs_file}")
         shutil.move(docs_file, docs_file.replace(".temp", ""))
 
-        for shard_file in shard_files:
-            if len(base_shard_files) > 0 and shard_file == base_shard_files[0]:
-                continue
-
-            os.remove(shard_file)
+        self._remove_sub_shard_files(shard_files, base_shard_files, shard)
 
         logger.info(f"Merged doc_shard {shard} to {docs_file}")
 
-    def write_index(self, f):
-        logger.info("Writing index to file")
+    def merge_to_N_shards(self, shards=24, shard_size=1000):
+        """
+        Merges the shards into N shards
+        """
 
-        postings_file = os.path.join(self.output_dir, "positions.bin")
-        term_fst = marisa_trie.BytesTrie()
-        term_fst.load(os.path.join(self.output_dir, "pos_terms.fst"))
+        shard_files = glob.glob(os.path.join(self.index_path, "shard_*.index"))
 
-        with open(postings_file, "rb") as pf:
-            for term, value in term_fst.items():
-                curr_doc_id = 0
-                offset = struct.unpack(SIZE_KEY["offset"], value)[0]
-                pf.seek(offset)
-                posting_count = struct.unpack(
-                    SIZE_KEY["postings_count"],
-                    pf.read(READ_SIZE_KEY[SIZE_KEY["postings_count"]]),
-                )[0]
+        file_size = 0
+        curr_files_in_shard = []
+        shards = []
+        for i in range(len(shard_files)):
+            file_size += os.path.getsize(shard_files[i])
+            filename = f"shard_{len(shards)}_{len(curr_files_in_shard)}"
 
-                f.write(f"{term}\t{posting_count}\n")
+            shutil.move(
+                shard_files[i], os.path.join(self.index_path, f"{filename}.index")
+            )
+            shutil.move(
+                os.path.join(self.index_path, f"shard_{i}.position"),
+                os.path.join(self.index_path, f"{filename}.position"),
+            )
+            shutil.move(
+                os.path.join(self.index_path, f"shard_{i}.offset"),
+                os.path.join(self.index_path, f"{filename}.offset"),
+            )
 
-                for _ in range(posting_count):
-                    delta, _ = struct.unpack(
-                        SIZE_KEY["deltaTF"], pf.read(READ_SIZE_KEY[SIZE_KEY["deltaTF"]])
-                    )
-                    curr_doc_id += delta
+            curr_files_in_shard.append(filename)
 
-                    positions = []
-                    position_count = struct.unpack(
-                        SIZE_KEY["position_count"],
-                        pf.read(READ_SIZE_KEY[SIZE_KEY["position_count"]]),
-                    )[0]
-                    curr_position = 0
-                    for _ in range(position_count):
-                        delta = struct.unpack(
-                            SIZE_KEY["position_delta"],
-                            pf.read(READ_SIZE_KEY[SIZE_KEY["position_delta"]]),
-                        )[0]
-                        curr_position += delta
-                        positions.append(str(curr_position))
+            if file_size > shard_size:
+                shards.append(curr_files_in_shard)
+                curr_files_in_shard = []
+                file_size = 0
 
-                    positions = ",".join(positions)
-                    f.write(f"\t{curr_doc_id}\t{positions}\n")
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            for shard in enumerate(shards):
+                executor.submit(self._merge, shard=shard, force_merge=True)

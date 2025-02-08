@@ -110,13 +110,7 @@ class DocumentShardedIndexBuilder:
         if sub_shard == 0:
             sub_shard = self.curr_shard if self.shard != -1 else 0
 
-        self._flush_shard(
-            shard, sub_shard=sub_shard, shard_filename="shard", flush_positions=False
-        )
-        self._flush_shard(
-            shard, sub_shard=sub_shard, shard_filename="pos_shard", flush_positions=True
-        )
-
+        self._flush_shard(shard, sub_shard=sub_shard, shard_filename="shard")
         self._flush_doc_map(shard, sub_shard)
 
         del self.term_map
@@ -192,7 +186,6 @@ class DocumentShardedIndexBuilder:
         shard: int = -1,
         sub_shard: int = 0,
         shard_filename="shard",
-        flush_positions=False,
     ):
         """
         Flush the current term map to disk.
@@ -210,20 +203,24 @@ class DocumentShardedIndexBuilder:
         shard_str = str(shard)
         shard_str = f"{shard}_{sub_shard}"
 
-        shard_path = os.path.join(
+        index_path = os.path.join(
             self.index_path, f"{shard_filename}_{shard_str}.index"
+        )
+        position_offset_path = os.path.join(
+            self.index_path, f"{shard_filename}_{shard_str}.position"
         )
         offset_dict = OrderedDict()
         position_offset_dict = OrderedDict()
 
         logger.info(
-            f"Flushing shard {shard_str} with {len(self.term_map)} terms to {shard_path}. Documents processed: {self.current_docs} in {time.time()-self.start}. Min doc ID: {self.min_doc_id}. Max doc ID: {self.max_doc_id}"
+            f"Flushing shard {shard_str} with {len(self.term_map)} terms to {index_path}. Documents processed: {self.current_docs} in {time.time()-self.start}. Min doc ID: {self.min_doc_id}. Max doc ID: {self.max_doc_id}"
         )
 
-        lock_flush_file = filelock.FileLock(shard_path + ".lock")
-        logger.debug(f"Locking {shard_path}")
-        with lock_flush_file:
-            with open(shard_path, "wb") as f:
+        lock_flush_file = filelock.FileLock(index_path + ".lock")
+        lock_position_file = filelock.FileLock(position_offset_path + ".lock")
+        logger.debug(f"Locking {index_path}")
+        with lock_flush_file, lock_position_file:
+            with open(index_path, "wb") as f, open(position_offset_path, "wb") as pos_f:
                 # Sort the terms to ensure consistent ordering
                 sorted_terms = sorted(self.term_map.keys())
                 for term in sorted_terms:
@@ -242,6 +239,8 @@ class DocumentShardedIndexBuilder:
                     )
 
                     prev_doc_id = 0
+                    position_offset_dict[term] = pos_f.tell()
+
                     for posting in term_obj.posting_lists:
                         delta = posting.doc_id - prev_doc_id
 
@@ -252,22 +251,22 @@ class DocumentShardedIndexBuilder:
                         )
                         prev_doc_id = posting.doc_id
 
-                        if flush_positions:
-                            filter_positions = [p for p in posting.positions if p >= 0]
-                            filter_positions = sorted(filter_positions)
-                            f.write(
-                                struct.pack(
-                                    SIZE_KEY["position_count"], len(filter_positions)
-                                )
+                        filter_positions = [p for p in posting.positions if p >= 0]
+                        filter_positions = sorted(filter_positions)
+                        f.write(
+                            struct.pack(
+                                SIZE_KEY["position_count"], len(filter_positions)
                             )
+                        )
 
-                            prev_position = 0
-                            for position in filter_positions:
-                                delta = position - prev_position
-                                f.write(struct.pack(SIZE_KEY["position_delta"], delta))
-                                prev_position = position
+                        prev_position = 0
+                        for position in filter_positions:
+                            delta = position - prev_position
+                            pos_f.write(struct.pack(SIZE_KEY["position_delta"], delta))
+                            prev_position = position
 
-        logger.debug(f"Unlocked {shard_path}")
+        logger.debug(f"Unlocked {index_path}")
+        logger.debug(f"Unlocked {position_offset_path}")
 
         offset_path = os.path.join(
             self.index_path, f"{shard_filename}_{shard_str}.offset"
@@ -281,10 +280,16 @@ class DocumentShardedIndexBuilder:
         with lock_offset_file:
             with open(offset_path, "wb") as offset_f:
                 for term, offset in offset_dict.items():
+                    position_offset = position_offset_dict.get(term, -1)
+                    assert (
+                        position_offset != -1
+                    ), f"Position offset for {term} not found {offset}"
+
                     term_bytes = term.encode("utf-8")
 
                     offset_f.write(struct.pack(SIZE_KEY["term_bytes"], len(term_bytes)))
                     offset_f.write(term_bytes)
                     offset_f.write(struct.pack(SIZE_KEY["offset"], offset))
+                    offset_f.write(struct.pack(SIZE_KEY["offset"], position_offset))
 
         logger.debug(f"Unlocked {offset_path}")

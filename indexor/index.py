@@ -54,18 +54,22 @@ class Index(IndexBase):
         return self.index.get_complement(term)
 
     def write_index_to_txt(self, path: str):
-        self.index.write_index(path)
+        self.index.write_index_to_txt(path)
 
 
 if __name__ == "__main__":
     import argparse
     import time
+    import os
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--index-path", type=str, required=True)
+    parser.add_argument("--write-index-to-txt", action="store_true")
     args = parser.parse_args()
 
     index = Index(load_path=args.index_path)
+    if args.write_index_to_txt:
+        index.write_index_to_txt(os.path.join(args.index_path, "index.txt"))
 
     """
     term_obj = index.get_term("!", positions=False)

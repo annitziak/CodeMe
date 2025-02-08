@@ -28,6 +28,7 @@ class IndexBuilder:
         index_path: str,
         batch_size: int = 1000,
         num_workers: int = 24,
+        shard_size=1000,
         debug=False,
         action: str = "build",
         is_sharded=False,
@@ -48,11 +49,12 @@ class IndexBuilder:
 
         self.index_path = index_path
         self.temp_index_path = index_path  # ".cache/temp"
-        self.doc_metadata = {}
 
         self.batch_size = batch_size
         self.num_workers = min(num_workers, os.cpu_count() - 1)
         self.num_shards = self.num_workers - 1  # leave one worker for merging
+
+        self.shard_size = shard_size
 
         self.action = action
         self.is_sharded = is_sharded
@@ -116,6 +118,7 @@ class IndexBuilder:
             max_id = max_id if not self.debug else min_id + 1000
 
             partitions = self._calculate_partitions(min_id, max_id, num_posts, conn)
+            partitions[-1][1] = max(max_id, partitions[-1][1])
             logger.info(f"Calculated partitions: {partitions}")
 
         shards_finished = os.path.join(self.index_path, "shards_finished")

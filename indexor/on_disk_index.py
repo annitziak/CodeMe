@@ -174,7 +174,9 @@ class ShardWorker:
         self.index_path = index_path
 
         glob_pattern_common = "shard_*.index" if is_sharded else "postings.bin"
-        glob_pattern_positions = "pos_shard_*.index" if is_sharded else "positions.bin"
+        glob_pattern_positions = (
+            "shard_*.positions" if is_sharded else "postings_positions.bin"
+        )
 
         self.postings_mmaps = MMappedReader(
             index_path, glob_pattern_common, is_sharded=is_sharded
@@ -193,17 +195,19 @@ class ShardWorker:
         # self.positions_mmaps.load(shard)
 
     def _get_term(
-        self, term: str, shard: int, offset: int, positions=False, limit=100_000
+        self, term: str, shard: int, offset: int, pos_offset=-1, limit=100_000
     ):
         start = time.time()
 
-        mmaps = self.positions_mmaps if positions else self.postings_mmaps
-        mmap = mmaps.load(shard)[shard]
-        mmap.seek(offset)
+        posting_mmap = self.postings_mmaps.load(shard)[shard]
+        posting_mmap.seek(offset)
+
+        position_mmap = self.positions_mmaps.load(shard)[shard]
+        position_mmap.seek(pos_offset)
 
         postings_count = struct.unpack(
             SIZE_KEY["postings_count"],
-            mmap.read(READ_SIZE_KEY[SIZE_KEY["postings_count"]]),
+            posting_mmap.read(READ_SIZE_KEY[SIZE_KEY["postings_count"]]),
         )[0]
         current_doc_id = 0
 
@@ -217,21 +221,21 @@ class ShardWorker:
 
             delta, term_frequency = struct.unpack(
                 SIZE_KEY["deltaTF"],
-                mmap.read(READ_SIZE_KEY[SIZE_KEY["deltaTF"]]),
+                posting_mmap.read(READ_SIZE_KEY[SIZE_KEY["deltaTF"]]),
             )
             current_doc_id += delta
 
             _positions = []
-            if positions:
+            if offset != -1:
                 curr_position = 0
                 position_count = struct.unpack(
                     SIZE_KEY["position_count"],
-                    mmap.read(READ_SIZE_KEY[SIZE_KEY["position_count"]]),
+                    posting_mmap.read(READ_SIZE_KEY[SIZE_KEY["position_count"]]),
                 )[0]
                 for _ in range(position_count):
                     delta = struct.unpack(
                         SIZE_KEY["position_delta"],
-                        mmap.read(READ_SIZE_KEY[SIZE_KEY["position_delta"]]),
+                        position_mmap.read(READ_SIZE_KEY[SIZE_KEY["position_delta"]]),
                     )[0]
                     curr_position += delta
                     _positions.append(curr_position)
@@ -369,9 +373,6 @@ class OnDiskIndex(IndexBase):
         self.is_sharded = config.get("is_sharded", False)
 
         self.term_fst = self._load_fst(os.path.join(self.load_path, "terms.fst"))
-        self.pos_term_fst = self._load_fst(
-            os.path.join(self.load_path, "pos_terms.fst")
-        )
 
         self.num_workers = min(
             index_builder_kwargs.get("num_workers", 24), os.cpu_count() - 1
@@ -412,13 +413,20 @@ class OnDiskIndex(IndexBase):
                 raise ValueError(f"Term {term} not found in index")
 
             for encoding in encoded:
-                shard, offset = struct.unpack(SIZE_KEY["offset_shard"], encoding)
-                yield shard, offset
+                shard, offset, pos_offset = struct.unpack(
+                    SIZE_KEY["pos_offset_shard"], encoding
+                )
+                yield shard, offset, pos_offset
             return
 
-        unpacked = [struct.unpack(SIZE_KEY["offset"], x) for x in encoded]
+        if encoded is None:
+            yield -1, -1, -1
+            return
+
+        unpacked = [struct.unpack(SIZE_KEY["pos_offset"], x) for x in encoded]
         assert len(encoded) == 1, f"Term {term} not found in index {unpacked}"
-        yield -1, struct.unpack(SIZE_KEY["offset"], encoded[0])[0]
+        logger.info(f"Unpacked: {unpacked}")
+        yield -1, unpacked[0][0], unpacked[0][1]
 
     def _build_term(self, term: Term, future):
         shard, doc_ids, term_frequencies, position_list = future.result()
@@ -444,13 +452,14 @@ class OnDiskIndex(IndexBase):
             return cached_term
 
         start = time.time()
-        fst = self.pos_term_fst if positions else self.term_fst
-
         results = []
         _start = time.time()
-        for shard, offset in self._read_fst(fst, term):
+        for shard, offset, pos_offset in self._read_fst(self.term_fst, term):
+            if shard == -1 and offset == -1 and pos_offset == -1:
+                continue
+
             future = self.worker_pool.submit(
-                worker_get_term, term, shard, offset, positions, limit
+                worker_get_term, term, shard, offset, pos_offset, limit
             )
             results.append(future)
 
@@ -481,6 +490,9 @@ class OnDiskIndex(IndexBase):
 
     def _get_shard_for_doc_id(self, doc_id: int):
         for shard, (start, end) in self.doc_bounds.items():
+            if start == float("inf") or end == float("-inf"):
+                continue
+
             if int(start) <= doc_id <= int(end):
                 return int(shard)
 
@@ -501,7 +513,7 @@ class OnDiskIndex(IndexBase):
     ) -> PostingList | None:
         target_shard = self._get_shard_for_doc_id(doc_id)
         logger.info(f"Target shard: {target_shard}")
-        for shard, offset in self._read_fst(self.term_fst, term):
+        for shard, offset, pos_offset in self._read_fst(self.term_fst, term):
             if shard != target_shard:
                 continue
 
@@ -509,7 +521,7 @@ class OnDiskIndex(IndexBase):
             ret = self._build_term(
                 Term(term),
                 self.worker_pool.submit(
-                    worker_get_term, term, shard, offset, positions=positions
+                    worker_get_term, term, shard, offset, pos_offset=pos_offset
                 ),
             )
             return ret.get_posting_list(doc_id)
@@ -532,7 +544,7 @@ class OnDiskIndex(IndexBase):
 
         all_term_offsets = {}
         for term in terms:
-            for shard, offset in self._read_fst(fst, term):
+            for shard, offset, _ in self._read_fst(self.term_fst, term):
                 if shard not in all_term_offsets:
                     all_term_offsets[shard] = []
 
@@ -567,7 +579,7 @@ class OnDiskIndex(IndexBase):
 
         all_term_offsets = {}
         for term in terms:
-            for shard, offset in self._read_fst(fst, term):
+            for shard, offset, _ in self._read_fst(self.term_fst, term):
                 if shard not in all_term_offsets:
                     all_term_offsets[shard] = []
 
@@ -623,6 +635,7 @@ class OnDiskIndex(IndexBase):
         return docs
 
     def write_index_to_txt(self, path: str):
+        logger.info(f"Writing index to {path}")
         if not os.path.exists(os.path.dirname(path)):
             logger.info(f"Creating directory {os.path.dirname(path)}")
             os.makedirs(os.path.dirname(path))
@@ -632,5 +645,9 @@ class OnDiskIndex(IndexBase):
                 if isinstance(term, bytes):
                     term = term.decode("utf-8")
 
-                term_obj = self.get_term(term)
-                f.write(f"{term_obj}\n")
+                term_obj = self.get_term(term, positions=True)
+                output = f"{term_obj.term}:{term_obj.document_frequency}\n"
+                for posting in term_obj.posting_lists:
+                    positions = ",".join([str(x) for x in posting.positions])
+                    output += f"\t{posting.doc_id}:{positions}\n"
+                f.write(output)
