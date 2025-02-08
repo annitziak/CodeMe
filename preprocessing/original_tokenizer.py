@@ -4,7 +4,6 @@ import logging
 from dataclasses import dataclass
 from preprocessing import CodeBlock, NormalTextBlock as TextBlock, LinkBlock, Term
 from preprocessing.normalizer import Normalizer
-from preprocessing.code_tokenizer.train import BPETokenizer
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -19,56 +18,52 @@ class TokenizedOutput:
 
 
 class CodeTokenizer:
-    def __init__(self, use_bpe=True, bpe_length_threshold=15):
+    def __init__(self):
         """
         Naive tokenizer for code snippets
 
         Based on keywords and operators found
         """
-        self.camel_case_re = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|\d+")
-        self.symbol_re = re.compile(r"([.,;:(){}\[\]=+\-*/])")
-
-        self.use_bpe = use_bpe
-        self.bpe_length_threshold = bpe_length_threshold
-
-        self.tokenizer = BPETokenizer(50256, save_path=".cache/tokenizer.json").load()
+        self.literal_re = re.compile(
+            r'(\d+|".*?|\'.*?\'|True|False|true|false|null|None|NaN|Inf)'
+        )
+        self.symbols = set('+-*/=()[]{}<>:;,.!@#$%^&|~`"')
 
     def __call__(self, *args, **kwargs):
         return self.tokenize(*args, **kwargs)
 
     def tokenize(self, text):
-        text = self._split_mixed_tokens(text)
-        words = self._split_symbols(text)
-        words = self._split_camel_case(text)
-        words = [self._split_snake_case(word) for word in words]
-
+        # rust_lib.tokenize_code()
         tokens = []
-        for word in words:
-            if self.should_use_bpe(word):
-                tokens.extend(self._split_bpe(word))
-            else:
-                tokens.append(word)
+        buffer = ""
 
-    def should_use_bpe(self, word):
-        return self.use_bpe and len(word) > self.bpe_length_threshold
+        for idx, char in enumerate(text):
+            if not char.isspace() and char not in self.symbols:
+                buffer += char
+                continue
 
-    def _split_bpe(self, text):
-        return self.tokenizer.encode(text)
+            if len(buffer) > 0:
+                if not self._add_literal(buffer, tokens, idx):
+                    self._add_identifier(buffer, tokens, idx)
 
-    def _split_snake_case(self, text):
-        return text.split("_")
+                buffer = ""
 
-    def _split_camel_case(self, text):
-        return re.findall(self.camel_case_re, text)
+            if char in self.symbols:
+                tokens.append(
+                    Term(
+                        term=char,
+                        original_term=char,
+                        position=len(tokens),
+                        start_char_offset=idx,
+                        end_char_offset=idx + 1,
+                    )
+                )
 
-    def _split_mixed_tokens(self, text):
-        identifier = re.sub(r"(\d+)", r" \1 ", text)
-        return identifier
+        if len(buffer) > 0:
+            if not self._add_literal(buffer, tokens, len(text)):
+                self._add_identifier(buffer, tokens, len(text))
 
-    def _split_symbols(self, text):
-        identifier = re.sub(self.symbol_re, r" \1 ", text)
-        identifier = re.sub(r"\s+", " ", identifier)
-        return identifier.strip()
+        return tokens
 
     def _add_literal(self, buffer, tokens, idx):
         if self.literal_re.match(buffer):

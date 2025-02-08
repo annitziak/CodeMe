@@ -3,7 +3,7 @@ import pprint
 
 from preprocessing import NormalTextBlock, LinkBlock, CodeBlock, Block
 from preprocessing.parser import DefaultParserInterface, HTMLParserInterface
-from preprocessing.tokenizer import Tokenizer
+from preprocessing.original_tokenizer import Tokenizer
 from preprocessing.normalizer import (
     StopWordNormalizer,
     StemmingNormalizer,
