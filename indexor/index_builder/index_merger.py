@@ -172,7 +172,12 @@ class IndexMerger:
                         self.index_path, f"{prefix}_{i}.offset"
                     )
                     with open(f_offset_filename, "rb") as f_offset:
-                        while True:
+                        doc_count = struct.unpack(
+                            SIZE_KEY["doc_count"],
+                            f_offset.read(READ_SIZE_KEY[SIZE_KEY["doc_count"]]),
+                        )[0]
+
+                        for _ in range(doc_count):
                             try:
                                 doc_id = struct.unpack(
                                     SIZE_KEY["doc_id"],
@@ -661,7 +666,7 @@ class IndexMerger:
 
                                 docs_offset[doc_id] = docs_f.tell()
                                 docs_f.write(
-                                    struct.pack(SIZE_KEY["doc_id"], doc_length)
+                                    struct.pack(SIZE_KEY["doc_length"], doc_length)
                                 )
                                 print("DOC LENGTH", doc_id, doc_length)
                         except struct.error as e:
@@ -671,6 +676,7 @@ class IndexMerger:
                             break
 
                 for doc_id, offset in docs_offset.items():
+                    print("DOC FINAL", doc_id, offset)
                     offset_f.write(struct.pack(SIZE_KEY["doc_id"], doc_id))
                     offset_f.write(struct.pack(SIZE_KEY["offset"], offset))
 

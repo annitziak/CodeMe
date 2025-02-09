@@ -555,9 +555,9 @@ class OnDiskIndex(IndexBase):
         value = self.doc_fst.get(str(doc_id))
         if value is None:
             try_again = self.doc_fst.get(str(doc_id)[:-2])
-            final = self.doc_fst.get("")
+            final = self.doc_fst.get(str(doc_id)[:-1])
             raise ValueError(
-                f"Document {doc_id} not found in index of length {len(self.doc_fst)} {try_again} {final} {self.doc_fst.keys()}"
+                f"Document {doc_id} not found in index of length {len(self.doc_fst)} {try_again} {final} {list(self.doc_fst.keys())[:10]}"
             )
 
         shard, offset = struct.unpack(SIZE_KEY["offset_shard"], value[0])
