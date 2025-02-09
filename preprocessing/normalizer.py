@@ -82,6 +82,7 @@ class Normalizer:
     def normalize(self, terms, filter_empty_terms=True):
         new_terms = []
         for term in terms:
+            term.term = str(term.term).strip()
             for operation in self.operations:
                 operation.normalize_term(term)
 

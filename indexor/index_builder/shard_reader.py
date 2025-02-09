@@ -61,7 +61,7 @@ class ShardReader:
 
             return term, offset, pos_offset
         except struct.error:
-            return None, None
+            return None, None, None
 
     def read_postings(self, offset: int, pos_offset=-1) -> list[PostingList]:
         self.f_shard.seek(offset)

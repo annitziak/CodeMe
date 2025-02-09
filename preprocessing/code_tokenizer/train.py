@@ -25,6 +25,15 @@ logger = logging.getLogger(__name__)
 
 
 class CustomPreTokenizer:
+    def __init__(self):
+        pass
+
+    def __setstate__(self, state):
+        pass
+
+    def __getstate__(self):
+        pass
+
     def pre_tokenize(self, text):
         text = re.sub(r"([^\s\w\[\]{}<>().,;:=+\-!*_/])", r" \1 ", text)
         text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
@@ -76,7 +85,7 @@ class TokenizerTrainer:
         )
 
     def train(self, iterator):
-        self.tokenizer.tokenizer.train_from_iterator(iterator, self.trainer)
+        self.tokenizer.tokenizer.train_from_iterator(iterator, trainer=self.trainer)
         self.tokenizer.save()
 
 
@@ -102,32 +111,73 @@ class SQLDataset:
                 batch = cursor.fetchmany(self.batch_size)
                 self.fetch_next = False
 
-                texts = []
                 for row in batch:
-                    text = row[1] + " " + self.html_parser.parse(row[2])
-                    texts.append(text)
-                    self.fetched += 1
+                    if row[2] is None or row[2] == "":
+                        continue
 
-                yield texts
+                    title = row[1] if row[1] is not None else ""
+                    body = self.html_parser.parse(row[2])
+                    text = (
+                        title
+                        + " "
+                        + " ".join(
+                            [
+                                x.text
+                                for x in body
+                                if x is not None and x.text is not None
+                            ]
+                        )
+                    )
+                    yield text
+
+                    self.fetched += 1
 
 
 class DatasetIterator:
-    def __init__(self, dataset: CodeDataset, sql_dataset: SQLDataset, batch_size: int):
+    def __init__(
+        self,
+        dataset: CodeDataset,
+        sql_dataset: SQLDataset,
+        batch_size: int,
+        use_sql=False,
+    ):
         self.batch_size = batch_size
         self.dataset = dataset
 
         self.sql_dataset = sql_dataset
         self.iter_sql_dataset = iter(sql_dataset.load())
 
+        self.use_sql = use_sql
+
     def __len__(self):
+        if not self.use_sql:
+            return len(self.dataset)
+
         return len(self.dataset) + len(self.sql_dataset)
 
     def __iter__(self):
         for i in range(0, len(self), self.batch_size):
             if i < len(self.dataset):
-                yield self.dataset[i : i + self.batch_size]
-            else:
-                yield next(self.iter_sql_dataset)
+                item = self.dataset[i : i + self.batch_size]
+                if (
+                    item is None
+                    or not isinstance(item, list)
+                    or not isinstance(item[0], str)
+                ):
+                    continue
+
+                for string in item:
+                    yield string
+            elif self.use_sql:
+                item = next(self.iter_sql_dataset)
+                if (
+                    item is None
+                    or not isinstance(item, list)
+                    or not isinstance(item[0], str)
+                ):
+                    continue
+
+                yield item
 
 
 if __name__ == "__main__":

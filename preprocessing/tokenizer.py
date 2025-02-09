@@ -6,6 +6,13 @@ from preprocessing import CodeBlock, NormalTextBlock as TextBlock, LinkBlock, Te
 from preprocessing.normalizer import Normalizer
 from preprocessing.code_tokenizer.train import BPETokenizer
 
+from tokenizers.pre_tokenizers import (
+    PreTokenizer,
+    Whitespace,
+    Sequence,
+)
+from preprocessing.code_tokenizer.train import CustomPreTokenizer
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
@@ -25,12 +32,29 @@ class CodeTokenizer:
 
         Based on keywords and operators found
         """
-        self.camel_case_re = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|\d+")
-        self.symbol_re = re.compile(r"([.,;:(){}\[\]=+\-*/])")
+        self.camel_case_re = re.compile(r"([a-z])([A-Z])|([A-Z])([A-Z][a-z])")
+        # self.symbol_re = re.compile(r"([.,;:(){}\[\]=+\-*/])")
+        self.symbol_re = re.compile(r"(\d+|[.,;:(){}\[\]=+\-*$<>?#!~@^&\|/]|\w+)")
 
         self.use_bpe = use_bpe
         self.bpe_length_threshold = bpe_length_threshold
 
+        custom_pretokenizer = PreTokenizer.custom(CustomPreTokenizer())
+        self.pre_tokenizer = Sequence([custom_pretokenizer, Whitespace()])
+        self.tokenizer = BPETokenizer(50256, save_path=".cache/tokenizer.json").load()
+
+    def __getstate__(self) -> object:
+        data = self.__dict__.copy()
+        del data["pre_tokenizer"]
+        del data["tokenizer"]
+
+        return data
+
+    def __setstate__(self, state) -> None:
+        self.__dict__.update(state)
+
+        custom_pretokenizer = PreTokenizer.custom(CustomPreTokenizer())
+        self.pre_tokenizer = Sequence([custom_pretokenizer, Whitespace()])
         self.tokenizer = BPETokenizer(50256, save_path=".cache/tokenizer.json").load()
 
     def __call__(self, *args, **kwargs):
@@ -39,51 +63,61 @@ class CodeTokenizer:
     def tokenize(self, text):
         text = self._split_mixed_tokens(text)
         words = self._split_symbols(text)
-        words = self._split_camel_case(text)
-        words = [self._split_snake_case(word) for word in words]
+        words = self._split_camel_case(words)
+        words = [
+            split_word for word in words for split_word in self._split_snake_case(word)
+        ]
 
         tokens = []
         for word in words:
+            word = str(word).strip()
             if self.should_use_bpe(word):
                 tokens.extend(self._split_bpe(word))
             else:
-                tokens.append(word)
+                tokens.append(
+                    Term(
+                        term=word,
+                        original_term=word,
+                        position=len(tokens),
+                        start_char_offset=0,
+                        end_char_offset=0,
+                    )
+                )
+
+        return tokens
 
     def should_use_bpe(self, word):
         return self.use_bpe and len(word) > self.bpe_length_threshold
 
     def _split_bpe(self, text):
-        return self.tokenizer.encode(text)
+        identifiers = self.tokenizer.encode(text)
+        tokens = []
+        for identifier in identifiers:
+            tokens.append(
+                Term(
+                    term=identifier,
+                    original_term=text,
+                    position=len(tokens),
+                    start_char_offset=0,
+                    end_char_offset=0,
+                )
+            )
+
+        return tokens
 
     def _split_snake_case(self, text):
         return text.split("_")
 
     def _split_camel_case(self, text):
-        return re.findall(self.camel_case_re, text)
+        return re.sub(self.camel_case_re, r"\1 \2", text).split(" ")
 
     def _split_mixed_tokens(self, text):
         identifier = re.sub(r"(\d+)", r" \1 ", text)
         return identifier
 
     def _split_symbols(self, text):
-        identifier = re.sub(self.symbol_re, r" \1 ", text)
-        identifier = re.sub(r"\s+", " ", identifier)
-        return identifier.strip()
-
-    def _add_literal(self, buffer, tokens, idx):
-        if self.literal_re.match(buffer):
-            tokens.append(
-                Term(
-                    term=buffer,
-                    original_term=buffer,
-                    position=len(tokens),
-                    start_char_offset=idx - len(buffer),
-                    end_char_offset=idx,
-                )
-            )
-            return True
-
-        return False
+        tokens = re.findall(self.symbol_re, text)
+        return " ".join(tokens)
 
     def _add_identifier(self, buffer, tokens, idx):
         encoded = self._encode(buffer)

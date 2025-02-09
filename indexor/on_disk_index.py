@@ -93,7 +93,9 @@ class MMappedReader:
 
     def __getitem__(self, key):
         if key not in self.files:
-            raise ValueError(f"{os.getpid()} Shard {key} not found in {self.files}")
+            raise ValueError(
+                f"{os.getpid()} Shard {key}({type(key)}) not found in {self.files}"
+            )
 
         return self.files[key]
 
@@ -175,7 +177,11 @@ class ShardWorker:
 
         glob_pattern_common = "shard_*.index" if is_sharded else "postings.bin"
         glob_pattern_positions = (
-            "shard_*.positions" if is_sharded else "postings_positions.bin"
+            "shard_*.position" if is_sharded else "postings_positions.bin"
+        )
+        glob_pattern_docs = "doc_shard_*.index" if is_sharded else "docs.bin"
+        glob_pattern_docs_offset = (
+            "doc_shard_*.offset" if is_sharded else "docs_offset.bin"
         )
 
         self.postings_mmaps = MMappedReader(
@@ -184,15 +190,24 @@ class ShardWorker:
         self.positions_mmaps = MMappedReader(
             index_path, glob_pattern_positions, is_sharded=is_sharded
         )
+        self.doc_mmaps = MMappedReader(
+            index_path, glob_pattern_docs, is_sharded=is_sharded
+        )
+        self.doc_offset_mmaps = MMappedReader(
+            index_path, glob_pattern_docs_offset, is_sharded=is_sharded
+        )
+
         self.doc_bounds = _load_doc_id_bounds(self.index_path)
 
     def __del__(self):
         self.positions_mmaps.__del__()
         self.postings_mmaps.__del__()
+        self.doc_mmaps.__del__()
 
     def _load_files(self, shard: int):
         self.postings_mmaps.load(shard)
-        # self.positions_mmaps.load(shard)
+        self.positions_mmaps.load(shard)
+        self.doc_mmaps.load(shard)
 
     def _get_term(
         self, term: str, shard: int, offset: int, pos_offset=-1, limit=100_000
@@ -311,6 +326,32 @@ class ShardWorker:
 
         return all_docs
 
+    def _get_document_length(self, doc_id: int, shard: int, offset: int):
+        mmap = self.doc_mmaps.load(shard)[shard]
+        mmap.seek(offset)
+
+        return struct.unpack(
+            SIZE_KEY["doc_length"],
+            mmap.read(READ_SIZE_KEY[SIZE_KEY["doc_length"]]),
+        )[0]
+
+    def _get_document_count(self):
+        doc_count = 0
+        for shard, (start, end) in self.doc_bounds.items():
+            shard = int(shard)
+            if start == float("inf") or end == float("-inf"):
+                continue
+
+            mmap = self.doc_offset_mmaps.load(shard)[shard]
+            mmap.seek(0)
+
+            doc_count += struct.unpack(
+                SIZE_KEY["doc_count"],
+                mmap.read(READ_SIZE_KEY[SIZE_KEY["doc_count"]]),
+            )[0]
+
+        return doc_count
+
 
 _worker = None
 
@@ -338,6 +379,16 @@ def worker_get_union(*args, **kwargs):
 def worker_load(*args, **kwargs):
     global _worker
     return _worker._load_files(*args, **kwargs)
+
+
+def worker_get_document_length(*args, **kwargs):
+    global _worker
+    return _worker._get_document_length(*args, **kwargs)
+
+
+def worker_get_document_count(*args, **kwargs):
+    global _worker
+    return _worker._get_document_count(*args, **kwargs)
 
 
 class OnDiskIndex(IndexBase):
@@ -373,6 +424,7 @@ class OnDiskIndex(IndexBase):
         self.is_sharded = config.get("is_sharded", False)
 
         self.term_fst = self._load_fst(os.path.join(self.load_path, "terms.fst"))
+        self.doc_fst = self._load_fst(os.path.join(self.load_path, "docs.fst"))
 
         self.num_workers = min(
             index_builder_kwargs.get("num_workers", 24), os.cpu_count() - 1
@@ -393,7 +445,6 @@ class OnDiskIndex(IndexBase):
         self.doc_bounds = _load_doc_id_bounds(self.load_path)
 
         self.term_cache = TermCache()
-        self.pos_term_cache = TermCache()
 
     def _load_fst(self, filename):
         fst = marisa_trie.BytesTrie()
@@ -445,8 +496,7 @@ class OnDiskIndex(IndexBase):
             term (str): The term to retrieve
             positions (bool): Whether to include positions in the term object
         """
-        cache = self.term_cache if not positions else self.pos_term_cache
-        cached_term = cache.get(term)
+        cached_term = self.term_cache.get(term)
         logger.info(f"Term {term} not found in cache")
         if cached_term is not None:
             return cached_term
@@ -467,7 +517,7 @@ class OnDiskIndex(IndexBase):
         for future in results:
             ret_term = self._build_term(ret_term, future)
 
-        cache.put(term, ret_term)
+        self.term_cache.put(term, ret_term)
         logger.info(f"GET TERM: time taken: {time.time() - start}")
 
         return ret_term
@@ -500,6 +550,22 @@ class OnDiskIndex(IndexBase):
 
     def get_document_frequency(self, term: str) -> int:
         return self.get_term(term).document_frequency
+
+    def get_document_length(self, doc_id: int) -> int:
+        value = self.doc_fst.get(str(doc_id))
+        if value is None:
+            try_again = self.doc_fst.get(str(doc_id)[:-2])
+            final = self.doc_fst.get("")
+            raise ValueError(
+                f"Document {doc_id} not found in index of length {len(self.doc_fst)} {try_again} {final} {self.doc_fst.keys()}"
+            )
+
+        shard, offset = struct.unpack(SIZE_KEY["offset_shard"], value[0])
+        future = self.worker_pool.submit(
+            worker_get_document_length, doc_id, shard=shard, offset=offset
+        )
+
+        return future.result()
 
     def get_all_posting_lists(self, term: str, positions=False) -> list[PostingList]:
         return [
@@ -633,6 +699,12 @@ class OnDiskIndex(IndexBase):
                 )
 
         return docs
+
+    def get_document_count(self):
+        return self.worker_pool.submit(worker_get_document_count).result()
+
+    def get_term_count(self):
+        return len(self.term_fst)
 
     def write_index_to_txt(self, path: str):
         logger.info(f"Writing index to {path}")

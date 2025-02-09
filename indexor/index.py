@@ -32,6 +32,9 @@ class Index(IndexBase):
     def get_document_frequency(self, term: str) -> int:
         return self.index.get_document_frequency(term)
 
+    def get_document_length(self, doc_id: int) -> int:
+        return self.index.get_document_length(doc_id)
+
     def get_all_posting_lists(self, term: str) -> list[PostingList]:
         return self.index.get_all_posting_lists(term)
 
@@ -52,6 +55,12 @@ class Index(IndexBase):
 
     def get_complement(self, term: str) -> list[int]:
         return self.index.get_complement(term)
+
+    def get_document_count(self) -> int:
+        return self.index.get_document_count()
+
+    def get_term_count(self) -> int:
+        return self.index.get_term_count()
 
     def write_index_to_txt(self, path: str):
         self.index.write_index_to_txt(path)
@@ -92,6 +101,8 @@ if __name__ == "__main__":
             f.write(f"{doc_id} : {term_str}")
             f.write("\n")
     """
+    print(f"DocumentCount={index.get_document_count()}")
+    print(f"TermCount={index.get_term_count()}")
 
     while True:
         term = input(
@@ -116,7 +127,11 @@ if __name__ == "__main__":
                 else:
                     print(f"Invalid query: {terms}")
             elif term[:1] == "P":
-                prefix = term.split(" ")[1]
+                possible_prefix = term.split(" ")
+                if len(possible_prefix) == 1:
+                    continue
+
+                prefix = possible_prefix[1]
                 term_obj = index.get_term_by_prefix(prefix)
                 print(f"Time taken for get_term_by_prefix: {time.time() - start}")
                 print(term_obj)

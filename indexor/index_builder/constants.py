@@ -12,6 +12,7 @@ SIZE_KEY = {
     "term_bytes": "<I",
     "doc_id": "<Q",
     "doc_length": "<I",
+    "doc_count": "<I",
 }
 
 READ_SIZE_KEY = {

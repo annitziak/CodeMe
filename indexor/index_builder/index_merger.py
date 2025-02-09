@@ -7,12 +7,13 @@ import shutil
 import filelock
 import concurrent.futures
 import marisa_trie
+import json
 import datrie
 
 from collections import OrderedDict
 from dataclasses import dataclass
 
-from indexor.index_builder.constants import SIZE_KEY
+from indexor.index_builder.constants import SIZE_KEY, READ_SIZE_KEY
 from indexor.index_builder.shard_reader import ShardReader
 
 logger = logging.getLogger(__name__)
@@ -58,14 +59,20 @@ class IndexMerger:
     def post_merge_cleanup(self):
         logger.info("Removing temporary files and lock files")
         for f in os.listdir(self.output_dir):
+            if not os.path.exists(os.path.join(self.output_dir, f)):
+                continue
+
             if ".temp" in f:
                 logger.info(f"Removing {f}")
                 os.remove(os.path.join(self.output_dir, f))
-            if ".lock" in f:
+            elif ".lock" in f:
                 logger.info(f"Removing {f}")
-                if not os.path.exists(os.path.join(self.output_dir, f)):
-                    continue
-
+                os.remove(os.path.join(self.output_dir, f))
+            elif "terms_" in f and ".fst" in f:
+                logger.info(f"Removing {f}")
+                os.remove(os.path.join(self.output_dir, f))
+            elif "docs_" in f and ".fst" in f:
+                logger.info(f"Removing {f}")
                 os.remove(os.path.join(self.output_dir, f))
 
     def build_datrie_from_generator(self, generator, chunk_size=100000):
@@ -136,9 +143,61 @@ class IndexMerger:
                 continue
 
             encoded_value = struct.pack(
-                SIZE_KEY["offset_shard"], shard, offset, pos_offset
+                SIZE_KEY["pos_offset_shard"], shard, offset, pos_offset
             )
             items.append((term, encoded_value))
+
+        fst = marisa_trie.BytesTrie(items)
+        fst.save(os.path.join(self.output_dir, f"{save_filename}.fst"))
+        # datrie = self.build_datrie_from_generator(gen_term_offset(term_offsets))
+        # datrie.save(os.path.join(self.output_dir, f"{save_filename}.dat"))
+        # return datrie
+
+        return fst
+
+    def build_all_doc_fsts(
+        self,
+        doc_offsets: OrderedDict | None = None,
+        save_filename="docs",
+        shards=24,
+        prefix="doc_shard",
+    ):
+        items = []
+
+        def gen_term_offset(term_offsets):
+            if term_offsets is None:
+                term_offsets = OrderedDict()
+                for i in range(shards):
+                    f_offset_filename = os.path.join(
+                        self.index_path, f"{prefix}_{i}.offset"
+                    )
+                    with open(f_offset_filename, "rb") as f_offset:
+                        while True:
+                            try:
+                                doc_id = struct.unpack(
+                                    SIZE_KEY["doc_id"],
+                                    f_offset.read(READ_SIZE_KEY[SIZE_KEY["doc_id"]]),
+                                )[0]
+                                offset = struct.unpack(
+                                    SIZE_KEY["offset"],
+                                    f_offset.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
+                                )[0]
+                                yield doc_id, i, offset
+                            except struct.error as e:
+                                logger.error(
+                                    f"Error reading {f_offset_filename} after length {len(term_offsets)} {e}"
+                                )
+                                break
+            else:
+                for item in term_offsets:
+                    yield item
+
+        for doc_id, shard, offset in gen_term_offset(doc_offsets):
+            # print(doc_id, shard, offset)
+            encoded_value = struct.pack(SIZE_KEY["offset_shard"], shard, offset)
+            items.append((str(doc_id), encoded_value))
+
+        print(len(items))
 
         fst = marisa_trie.BytesTrie(items)
         fst.save(os.path.join(self.output_dir, f"{save_filename}.fst"))
@@ -182,6 +241,7 @@ class IndexMerger:
             save_filename="postings",
             force_merge=True,
         )
+        self._merge_docs(force_merge=True)
 
     def _merge(
         self,
@@ -286,6 +346,7 @@ class IndexMerger:
             )
 
         term_offsets = OrderedDict()
+        docs_offsets = OrderedDict()
 
         logger.info(
             f"Merging files {shard_files} and {offset_files}. force_merge={force_merge}. Saving to {postings_file} ..."
@@ -362,13 +423,8 @@ class IndexMerger:
         shutil.move(postings_file, postings_file.replace(".temp", ""))
         shutil.move(positions_file, positions_file.replace(".temp", ""))
 
-        if shard == -1:
-            fst_save_filename = "terms"
-            # Builds terms.fst with (-1, offset) i.e. shard, offset
-            self._build_term_fst(term_offsets, save_filename=fst_save_filename)
-        else:
-            fst_save_filename = f"terms_{shard}"
-            self._build_term_fst(term_offsets, save_filename=fst_save_filename)
+        fst_save_filename = "terms" if shard == -1 else f"terms_{shard}"
+        self._build_term_fst(term_offsets, save_filename=fst_save_filename)
 
         if shard != -1:
             offset_filename = os.path.join(
@@ -389,6 +445,8 @@ class IndexMerger:
 
         logger.info(f"Merged {shard_filename} {shard} to {postings_file}")
 
+        return None, None, None
+
     def _remove_sub_shard_files(self, shard_files, base_shard_files, shard=-1):
         for shard_file in shard_files:
             if (
@@ -399,6 +457,29 @@ class IndexMerger:
                 continue
 
             os.remove(shard_file)
+
+    def _build_doc_fst(self, doc_offsets, save_filename="docs", shard=-1):
+        logger.info(f"Building FST for {len(doc_offsets)} docs")
+        if os.path.exists(os.path.join(self.output_dir, f"{save_filename}.fst")):
+            logger.info(f"Loading {save_filename}.fst")
+            fst = marisa_trie.BytesTrie()
+            fst.load(os.path.join(self.output_dir, f"{save_filename}.fst"))
+            logger.info(f"Loaded {save_filename}.fst")
+
+            for doc_id, values in fst.items():
+                if doc_id in doc_offsets:
+                    continue
+
+                doc_offsets[doc_id] = struct.unpack(SIZE_KEY["offset_shard"], values)[0]
+
+        items = []
+        for doc_id, offset in doc_offsets.items():
+            items.append(
+                (str(doc_id), struct.pack(SIZE_KEY["offset_shard"], shard, offset))
+            )
+
+        fst = marisa_trie.BytesTrie(items)
+        fst.save(os.path.join(self.output_dir, f"{save_filename}.fst"))
 
     def _build_term_fst(
         self,
@@ -420,11 +501,13 @@ class IndexMerger:
             logger.info(f"Loaded {load_filename}.fst")
 
             for term, values in fst.items():
-                for offset, pos_offset in values:
-                    if (term, shard) in term_offsets:
-                        continue
+                shard, offset, pos_offset = struct.unpack(
+                    SIZE_KEY["pos_offset_shard"], values
+                )
+                if (term, shard) in term_offsets:
+                    continue
 
-                    term_offsets[(term, shard)] = (-1, offset, pos_offset)
+                term_offsets[(term, shard)] = (shard, offset, pos_offset)
 
         items = []
         for (term, shard), (_, offset, pos_offset) in term_offsets.items():
@@ -490,10 +573,22 @@ class IndexMerger:
         base_shard_files = glob.glob(
             os.path.join(self.index_path, f"doc_shard_{shard}.index")
         )
+        base_offset_files = glob.glob(
+            os.path.join(self.index_path, f"doc_shard_{shard}.offset")
+        )
 
         sub_shard_name = f"{shard}_*" if shard != -1 else "*"
-        shard_files = glob.glob(
-            os.path.join(self.index_path, f"doc_shard_{sub_shard_name}.index")
+        shard_files = sorted(
+            glob.glob(
+                os.path.join(self.index_path, f"doc_shard_{sub_shard_name}.index")
+            ),
+            key=lambda x: int(x.split("_")[-1].split(".")[0]),
+        )
+        offset_files = sorted(
+            glob.glob(
+                os.path.join(self.index_path, f"doc_shard_{sub_shard_name}.offset")
+            ),
+            key=lambda x: int(x.split("_")[-1].split(".")[0]),
         )
 
         if len(shard_files) < 2 and not force_merge:
@@ -502,36 +597,108 @@ class IndexMerger:
 
         if len(base_shard_files) > 0:
             shard_files.insert(0, base_shard_files[0])
+        if len(base_offset_files) > 0:
+            offset_files.insert(0, base_offset_files[0])
 
         docs_file = os.path.join(self.output_dir, "docs.bin")
+        offset_file = os.path.join(self.output_dir, "docs.offset")
         if shard != -1:
             docs_file = os.path.join(self.output_dir, f"doc_shard_{shard}.temp.index")
+            offset_file = os.path.join(
+                self.output_dir, f"doc_shard_{shard}.temp.offset"
+            )
 
         logger.info(
             f"Merging files {shard_files}. force_merge={force_merge}. Saving to {docs_file} ..."
         )
 
+        docs_offset = OrderedDict()
+
         lock_docs_file = filelock.FileLock(docs_file + ".lock")
+        lock_offset_file = filelock.FileLock(offset_file + ".lock")
         logger.debug(f"Locking {docs_file}")
-        with lock_docs_file:
-            with open(docs_file, "wb") as docs_f:
-                for shard_file in shard_files:
-                    with open(shard_file, "rb") as shard_f:
-                        shutil.copyfileobj(shard_f, docs_f)
+        with lock_docs_file, lock_offset_file:
+            doc_count = 0
+            for shard_file, offset_filename in zip(shard_files, offset_files):
+                with (
+                    open(offset_filename, "rb") as roffset_f,
+                ):
+                    doc_count += struct.unpack(
+                        SIZE_KEY["doc_count"],
+                        roffset_f.read(READ_SIZE_KEY[SIZE_KEY["doc_count"]]),
+                    )[0]
+
+            with open(docs_file, "wb") as docs_f, open(offset_file, "wb") as offset_f:
+                offset_f.seek(0)
+                offset_f.write(struct.pack(SIZE_KEY["doc_count"], doc_count))
+
+                for shard_file, offset_filename in zip(shard_files, offset_files):
+                    with (
+                        open(shard_file, "rb") as shard_f,
+                        open(offset_filename, "rb") as roffset_f,
+                    ):
+                        try:
+                            local_doc_count = struct.unpack(
+                                SIZE_KEY["doc_count"],
+                                roffset_f.read(READ_SIZE_KEY[SIZE_KEY["doc_count"]]),
+                            )[0]
+
+                            for _ in range(local_doc_count):
+                                doc_id = struct.unpack(
+                                    SIZE_KEY["doc_id"],
+                                    roffset_f.read(READ_SIZE_KEY[SIZE_KEY["doc_id"]]),
+                                )[0]
+                                offset = struct.unpack(
+                                    SIZE_KEY["offset"],
+                                    roffset_f.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
+                                )[0]
+
+                                shard_f.seek(offset)
+                                doc_length = struct.unpack(
+                                    SIZE_KEY["doc_length"],
+                                    shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_length"]]),
+                                )[0]
+
+                                docs_offset[doc_id] = docs_f.tell()
+                                docs_f.write(
+                                    struct.pack(SIZE_KEY["doc_id"], doc_length)
+                                )
+                                print("DOC LENGTH", doc_id, doc_length)
+                        except struct.error as e:
+                            logger.error(
+                                f"Error reading {offset_filename} after length {len(docs_offset)} {e}"
+                            )
+                            break
+
+                for doc_id, offset in docs_offset.items():
+                    offset_f.write(struct.pack(SIZE_KEY["doc_id"], doc_id))
+                    offset_f.write(struct.pack(SIZE_KEY["offset"], offset))
 
         logger.debug(f"Unlocked {docs_file}")
         shutil.move(docs_file, docs_file.replace(".temp", ""))
+        shutil.move(offset_file, offset_file.replace(".temp", ""))
+
+        docs_filename = "docs" if shard == -1 else f"docs_{shard}"
+        self._build_doc_fst(docs_offset, save_filename=docs_filename, shard=shard)
 
         self._remove_sub_shard_files(shard_files, base_shard_files, shard)
+        self._remove_sub_shard_files(offset_files, base_offset_files, shard)
 
         logger.info(f"Merged doc_shard {shard} to {docs_file}")
 
-    def merge_to_N_shards(self, shards=24, shard_size=1000):
+        min_doc_id = min(docs_offset.keys()) if len(docs_offset) > 0 else float("inf")
+        max_doc_id = max(docs_offset.keys()) if len(docs_offset) > 0 else float("-inf")
+        return shard, min_doc_id, max_doc_id
+
+    def merge_shards_to_size(self, shards=25, shard_size=1000):
         """
         Merges the shards into N shards
         """
 
-        shard_files = glob.glob(os.path.join(self.index_path, "shard_*.index"))
+        shard_files = sorted(
+            glob.glob(os.path.join(self.index_path, "shard_*.index")),
+            key=lambda x: int(x.split("_")[-1].split(".")[0]),
+        )
 
         file_size = 0
         curr_files_in_shard = []
@@ -551,14 +718,62 @@ class IndexMerger:
                 os.path.join(self.index_path, f"shard_{i}.offset"),
                 os.path.join(self.index_path, f"{filename}.offset"),
             )
+            shutil.move(
+                os.path.join(self.index_path, f"doc_shard_{i}.index"),
+                os.path.join(self.index_path, f"doc_{filename}.index"),
+            )
+            shutil.move(
+                os.path.join(self.index_path, f"doc_shard_{i}.offset"),
+                os.path.join(self.index_path, f"doc_{filename}.offset"),
+            )
+
+            logger.info(f"Moved {shard_files[i]} to {filename}")
 
             curr_files_in_shard.append(filename)
 
             if file_size > shard_size:
                 shards.append(curr_files_in_shard)
+                logger.info(
+                    f"Created shard {len(shards)} with {len(curr_files_in_shard)} files of size {file_size}"
+                )
                 curr_files_in_shard = []
                 file_size = 0
 
-        with concurrent.futures.ProcessPoolExecutor() as executor:
-            for shard in enumerate(shards):
-                executor.submit(self._merge, shard=shard, force_merge=True)
+        shards.append(curr_files_in_shard)
+        logger.info(
+            f"Created shard {len(shards)} with {len(curr_files_in_shard)} files of size {file_size}"
+        )
+
+        futures = []
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=len(shards)
+        ) as executor:
+            for shard, _ in enumerate(shards):
+                futures.append(
+                    executor.submit(self._merge, shard=shard, force_merge=True)
+                )
+                futures.append(
+                    executor.submit(self._merge_docs, shard=shard, force_merge=True)
+                )
+
+        bounds = {}
+        for future in concurrent.futures.as_completed(futures):
+            shard, low_doc_id, high_doc_id = future.result()
+            if shard is None:
+                continue
+
+            bounds[shard] = (low_doc_id, high_doc_id)
+
+        logger.info("Merged all shards")
+        self.post_merge_cleanup()
+
+        doc_meta = os.path.join(self.index_path, "shard.temp.meta")
+        lock_doc_meta = filelock.FileLock(doc_meta + ".lock")
+        with lock_doc_meta:
+            with open(doc_meta, "w") as f:
+                json.dump(bounds, f)
+        logger.info(f"Saved document bounds {bounds} to {doc_meta}")
+
+        shutil.move(doc_meta, doc_meta.replace(".temp", ""))
+
+        return len(shards)

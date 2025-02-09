@@ -118,7 +118,7 @@ class IndexBuilder:
             max_id = max_id if not self.debug else min_id + 1000
 
             partitions = self._calculate_partitions(min_id, max_id, num_posts, conn)
-            partitions[-1][1] = max(max_id, partitions[-1][1])
+            partitions[-1] = (partitions[-1][0], max(max_id, partitions[-1][1]))
             logger.info(f"Calculated partitions: {partitions}")
 
         shards_finished = os.path.join(self.index_path, "shards_finished")
@@ -202,10 +202,11 @@ class IndexBuilder:
         if self.is_sharded:
             logger.info("Skipping final merge")
             index_merger.post_merge_cleanup()
-            index_merger.build_all_term_fsts(shards=self.num_shards)
-            index_merger.build_all_term_fsts(
-                shards=self.num_shards, prefix="pos_shard", save_filename="pos_terms"
+            self.num_shards = index_merger.merge_shards_to_size(
+                shard_size=2_000_000, shards=self.num_shards
             )
+            index_merger.build_all_term_fsts(shards=self.num_shards)
+            index_merger.build_all_doc_fsts(shards=self.num_shards)
             return
 
         logger.info("Performing final merge")
@@ -439,6 +440,9 @@ if __name__ == "__main__":
     if args.write_index_to_txt:
         index.write_index_to_txt(os.path.join(args.index_path, "index.txt"))
 
+    print(f"DocumentCount={index.get_document_count()}")
+    print(f"TermCount={index.get_term_count()}")
+
     print(index.get_term("!", positions=False))
     print(index.get_term("python", positions=False))
     print(index.get_term("java", positions=False))
@@ -448,3 +452,5 @@ if __name__ == "__main__":
     print(index.get_term("python", positions=True))
     print(index.get_term("java", positions=True))
     print(index.get_term("javascript", positions=True))
+
+    print(index.get_document_length(26602868))
