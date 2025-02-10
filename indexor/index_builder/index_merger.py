@@ -312,7 +312,7 @@ class IndexMerger:
             return
 
         if len(shard_files) != len(offset_files):
-            return
+            return None, None, None
 
         if len(base_shard_files) > 0 and len(base_offset_files) > 0:
             shard_files.insert(0, base_shard_files[0])
@@ -333,6 +333,13 @@ class IndexMerger:
             else:
                 raise ValueError(f"Invalid shard file: {x} {possible_nums}")
 
+        if len(shard_files) <= 1:
+            # Only base shard file is present skip merging even if force_merge
+            assert len(offset_files) == len(shard_files) and len(position_files) == len(
+                shard_files
+            )
+            return None, None, None
+
         shard_files = sorted(shard_files, key=lambda x: extract_shard(x))
         position_files = sorted(position_files, key=lambda x: extract_shard(x))
         offset_files = sorted(offset_files, key=lambda x: extract_shard(x))
@@ -351,7 +358,6 @@ class IndexMerger:
             )
 
         term_offsets = OrderedDict()
-        docs_offsets = OrderedDict()
 
         logger.info(
             f"Merging files {shard_files} and {offset_files}. force_merge={force_merge}. Saving to {postings_file} ..."
@@ -475,7 +481,9 @@ class IndexMerger:
                 if doc_id in doc_offsets:
                     continue
 
-                doc_offsets[doc_id] = struct.unpack(SIZE_KEY["offset_shard"], values)[0]
+                doc_offsets[int(doc_id)] = struct.unpack(
+                    SIZE_KEY["offset_shard"], values
+                )[0]
 
         items = []
         for doc_id, offset in doc_offsets.items():
@@ -664,11 +672,10 @@ class IndexMerger:
                                     shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_length"]]),
                                 )[0]
 
-                                docs_offset[doc_id] = docs_f.tell()
+                                docs_offset[int(doc_id)] = docs_f.tell()
                                 docs_f.write(
                                     struct.pack(SIZE_KEY["doc_length"], doc_length)
                                 )
-                                print("DOC LENGTH", doc_id, doc_length)
                         except struct.error as e:
                             logger.error(
                                 f"Error reading {offset_filename} after length {len(docs_offset)} {e}"
@@ -676,13 +683,15 @@ class IndexMerger:
                             break
 
                 for doc_id, offset in docs_offset.items():
-                    print("DOC FINAL", doc_id, offset)
                     offset_f.write(struct.pack(SIZE_KEY["doc_id"], doc_id))
                     offset_f.write(struct.pack(SIZE_KEY["offset"], offset))
 
         logger.debug(f"Unlocked {docs_file}")
         shutil.move(docs_file, docs_file.replace(".temp", ""))
         shutil.move(offset_file, offset_file.replace(".temp", ""))
+
+        min_doc_id = min(docs_offset.keys()) if len(docs_offset) > 0 else None
+        max_doc_id = max(docs_offset.keys()) if len(docs_offset) > 0 else None
 
         docs_filename = "docs" if shard == -1 else f"docs_{shard}"
         self._build_doc_fst(docs_offset, save_filename=docs_filename, shard=shard)
@@ -692,9 +701,7 @@ class IndexMerger:
 
         logger.info(f"Merged doc_shard {shard} to {docs_file}")
 
-        min_doc_id = min(docs_offset.keys()) if len(docs_offset) > 0 else float("inf")
-        max_doc_id = max(docs_offset.keys()) if len(docs_offset) > 0 else float("-inf")
-        return shard, min_doc_id, max_doc_id
+        return shard if min_doc_id is not None else None, min_doc_id, max_doc_id
 
     def merge_shards_to_size(self, shards=25, shard_size=1000):
         """

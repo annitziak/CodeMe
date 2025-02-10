@@ -6,6 +6,7 @@ from preprocessing.parser import DefaultParserInterface, HTMLParserInterface
 
 # from preprocessing.original_tokenizer import Tokenizer
 from preprocessing.tokenizer import Tokenizer
+
 from preprocessing.normalizer import (
     StopWordNormalizer,
     StemmingNormalizer,

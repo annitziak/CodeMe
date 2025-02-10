@@ -65,6 +65,9 @@ class Index(IndexBase):
     def write_index_to_txt(self, path: str):
         self.index.write_index_to_txt(path)
 
+    def terms(self):
+        return self.index.terms()
+
 
 if __name__ == "__main__":
     import argparse
@@ -101,7 +104,7 @@ if __name__ == "__main__":
             f.write(f"{doc_id} : {term_str}")
             f.write("\n")
     """
-    print(f"DocumentCount={index.get_document_count()}")
+    # print(f"DocumentCount={index.get_document_count()}")
     print(f"TermCount={index.get_term_count()}")
 
     while True:
@@ -136,13 +139,22 @@ if __name__ == "__main__":
                 print(f"Time taken for get_term_by_prefix: {time.time() - start}")
                 print(term_obj)
             else:
-                term_obj = index.get_term(term, positions=False)
+                term_obj = index.get_term(term, positions=True)
                 print(f"Time taken for get_term: {time.time() - start}")
                 print(term_obj)
+
+                """
+                start = time.time()
+                term_obj = index.get_term(term, positions=True)
+                print(f"Time taken for get_term with positions: {time.time() - start}")
+                print(term_obj)
+                """
 
                 term_obj = index.get_posting_list(term, 15198967)
                 print(f"Time taken for get_posting_list: {time.time() - start}")
                 print(term_obj)
         except ValueError as e:
-            logger.error(e)
+            import traceback
+
+            logger.error(f"Error: {e} {traceback.format_exc()}")
             continue

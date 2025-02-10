@@ -105,7 +105,9 @@ class IndexBuilder:
         elif self.action == "build-fst":
             logger.info("Building FST index")
             index_merger = IndexMerger(self.temp_index_path, output_dir=self.index_path)
-            return index_merger.build_all_term_fsts(shards=self.num_shards)
+            _ = index_merger.build_all_term_fsts(shards=self.num_shards)
+            _ = index_merger.build_all_doc_fsts(shards=self.num_shards)
+            return
 
         assert self.action == "build", f"Invalid action: {self.action}"
         logger.info("Building index")
@@ -203,7 +205,7 @@ class IndexBuilder:
             logger.info("Skipping final merge")
             index_merger.post_merge_cleanup()
             self.num_shards = index_merger.merge_shards_to_size(
-                shard_size=2_000_000, shards=self.num_shards
+                shard_size=2_000_000_000, shards=self.num_shards
             )
             index_merger.build_all_term_fsts(shards=self.num_shards)
             index_merger.build_all_doc_fsts(shards=self.num_shards)
@@ -237,7 +239,7 @@ class IndexBuilder:
             cur = conn.get_cursor(name=f"index_builder_{shard}")
             # include tags???
             debug = "LIMIT 100" if self.debug else ""
-            select_query = f"SELECT id, title, body FROM posts WHERE id >= {start} AND id <= {end} ORDER BY id ASC {debug}"
+            select_query = f"""SELECT id, title, body FROM posts WHERE id >= {start} AND id <= {end} WHERE posttypeid=1 ORDER BY id ASC {debug}"""
             cur.execute(select_query)
             logger.info(
                 "Processing shard %d: %d-%d with query %s",
@@ -344,6 +346,32 @@ class IndexBuilder:
             return []
 
         partition_precomputed = [
+            (4, 3556965),
+            (3556966, 7113927),
+            (7113928, 10670889),
+            (10670890, 14227851),
+            (14227852, 17784813),
+            (17784814, 21341775),
+            (21341776, 24898737),
+            (24898738, 28455699),
+            (28455700, 32012661),
+            (32012662, 35569623),
+            (35569624, 39126585),
+            (39126586, 42683547),
+            (42683548, 46240509),
+            (46240510, 49797471),
+            (49797472, 53354433),
+            (53354434, 56911395),
+            (56911396, 60468357),
+            (60468358, 64025319),
+            (64025320, 67582281),
+            (67582282, 71139243),
+            (71139244, 74696205),
+            (74696206, 78253176),
+        ]
+
+        """
+        [
             (4, 3151437),
             (3151438, 6120881),
             (6120882, 9103209),
@@ -372,6 +400,7 @@ class IndexBuilder:
             # (71226626, 78253176),
             #  (74816232, 78253176),
         ]
+        """
 
         if len(partition_precomputed) == self.num_shards:
             return partition_precomputed
@@ -438,7 +467,7 @@ if __name__ == "__main__":
     index = Index(load_path=args.index_path)
 
     if args.write_index_to_txt:
-        index.write_index_to_txt(os.path.join(args.index_path, "index.txt"))
+        index.write_index_to_txt(args.index_path)
 
     print(f"DocumentCount={index.get_document_count()}")
     print(f"TermCount={index.get_term_count()}")
