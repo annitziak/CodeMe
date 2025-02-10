@@ -129,16 +129,17 @@ if __name__ == "__main__":
                     print(term_obj)
                 else:
                     print(f"Invalid query: {terms}")
-            elif term[:1] == "P":
+            elif term[:2] == "P ":
                 possible_prefix = term.split(" ")
                 if len(possible_prefix) == 1:
                     continue
 
-                prefix = possible_prefix[1]
+                prefix = possible_prefix[-1]
                 term_obj = index.get_term_by_prefix(prefix)
                 print(f"Time taken for get_term_by_prefix: {time.time() - start}")
                 print(term_obj)
-            else:
+            elif term[:2] == "p ":
+                term = term[2:]
                 term_obj = index.get_term(term, positions=True)
                 print(f"Time taken for get_term: {time.time() - start}")
                 print(term_obj)
@@ -153,6 +154,11 @@ if __name__ == "__main__":
                 term_obj = index.get_posting_list(term, 15198967)
                 print(f"Time taken for get_posting_list: {time.time() - start}")
                 print(term_obj)
+            else:
+                term_obj = index.get_term(term, positions=False)
+                print(f"Time taken for get_term: {time.time() - start}")
+                print(term_obj)
+
         except ValueError as e:
             import traceback
 

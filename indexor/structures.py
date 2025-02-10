@@ -61,7 +61,7 @@ class MutablePostingList:
         position_store.add_positions(new_positions)
 
 
-@jit(nopython=True)
+@jit(nopython=True, cache=True, fastmath=True)
 def create_posting_lists_numba(
     doc_ids,
     term_frequencies,
@@ -74,6 +74,20 @@ def create_posting_lists_numba(
         position_list = position_lists[start:end]
         result.append(PostingList(doc_ids[i], term_frequencies[i], position_list))
     return result
+
+
+@jit(nopython=True, cache=True, fastmath=True)
+def concat_positions_numba(positions_list, lengths):
+    total_lengths = np.sum(lengths)
+    concat = np.zeros(total_lengths, dtype=np.uint32)
+
+    start = 0
+    for i, pos_list in enumerate(positions_list):
+        if hasattr(pos_list, "__len__"):
+            concat[start : start + lengths[i]] = pos_list
+            start += lengths[i]
+
+    return concat
 
 
 @dataclass
@@ -137,58 +151,49 @@ class Term:
         position_lists: list[list[int]],
         positions=False,
     ):
-        start = time.time()
-        doc_ids = np.asarray(doc_ids, dtype=np.uint64)
+        t_start = time.time()
+
+        doc_ids = np.asarray(doc_ids, dtype=np.uint32)
         term_frequencies = np.asarray(term_frequencies, dtype=np.uint32)
 
-        lengths = np.array([len(x) for x in position_lists], dtype=np.uint32)
-        offsets = np.zeros(len(lengths) + 1, dtype=np.uint32)
+        if len(position_lists) > 0 and isinstance(position_lists[0], list):
+            lengths = np.fromiter(
+                (len(x) for x in position_lists),
+                dtype=np.uint32,
+                count=len(position_lists),
+            )
+        else:
+            lengths = np.zeros(len(position_lists), dtype=np.uint32)
+
+        offsets = np.empty(len(lengths) + 1, dtype=np.uint32)
+        offsets[0] = 0
         np.cumsum(lengths, out=offsets[1:])
 
-        total_length = offsets[-1]
-        concat = np.zeros(total_length, dtype=np.uint32)
-
-        for i, position_list in enumerate(position_lists):
-            concat[offsets[i] : offsets[i + 1]] = position_list
-
-        """
-        position_idxs = np.ones_like(doc_ids, dtype=np.int32) * -1
-        if positions:
-            for i in range(len(doc_ids)):
-                position_idx = position_store.add_positions(position_lists[i])
-                position_idxs[i] = position_idx
-        """
+        # Create concatenated array and fill in one go if possible
+        concat = np.zeros(offsets[-1], dtype=np.uint32)
+        if position_lists:
+            # If position_lists are already numpy arrays, use direct assignment
+            if isinstance(position_lists[0], np.ndarray):
+                np.concatenate(position_lists, out=concat)
+            else:
+                # For lists, use efficient slicing
+                start = 0
+                for pos_list in position_lists:
+                    if hasattr(pos_list, "__len__"):
+                        concat[start : start + len(pos_list)] = pos_list
+                        start += len(pos_list)
 
         add_posting_lists = create_posting_lists_numba(
             doc_ids, term_frequencies, concat, offsets
         )
-        end = time.time()
+        t_end = time.time()
 
-        print(
-            "Time to construct posting lists:",
-            end - start,
-            len(add_posting_lists),
-            doc_ids[:10],
-            term_frequencies[:10],
-            add_posting_lists[:10],
-            position_lists[:10],
-        )
         self.posting_lists.extend(add_posting_lists)
         self.document_frequency += len(doc_ids)
-
         print(
-            "Result",
-            [x.position_idx for x in self.posting_lists[:10]],
+            "Time to construct posting lists:",
+            t_end - t_start,
         )
-
-        """
-        assert all(
-            [
-                self.posting_lists[doc_id].doc_id == doc_id
-                for doc_id in sorted(list(self.posting_lists.keys()))
-            ]
-        ), f"Posting list for term {self.term} is not sorted by document id"
-        """
 
     def get_posting_list(self, doc_id: int) -> PostingList | None:
         if len(self.posting_lists) == 0 or doc_id < self.posting_lists[0].doc_id:

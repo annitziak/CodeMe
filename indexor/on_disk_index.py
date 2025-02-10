@@ -10,7 +10,7 @@ import logging
 import psutil
 import numpy as np
 
-from numba import njit
+from numba import jit, int32, uint16, int64, types
 from concurrent.futures import ProcessPoolExecutor
 
 from indexor.structures import Term, PostingList, IndexBase
@@ -22,7 +22,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-@njit(fastmath=True, cache=True)
+@jit(int64(types.Array(types.uint8, 1, "A", readonly=True)), nopython=True, cache=True)
+def from_bytes(byte_data):
+    value = [b << i * 8 for i, b in enumerate(byte_data)]
+    return sum(value)
+
+
+@jit(
+    types.Array(uint16, 1, "C")(types.Array(uint16, 1, "A", readonly=True)),
+    nopython=True,
+    fastmath=True,
+    cache=True,
+    boundscheck=False,
+    nogil=True,
+)
 def fast_cumsum(deltas):
     result = np.empty_like(deltas)
     acc = 0
@@ -31,6 +44,51 @@ def fast_cumsum(deltas):
         result[i] = acc
 
     return result
+
+
+@jit(
+    types.UniTuple(types.Array(int32, 1, "C"), 3)(
+        types.Array(types.uint8, 1, "A", readonly=True), int64, int64, int64, int64
+    ),
+    nopython=True,
+    fastmath=True,
+    cache=True,
+)
+def process_posting_block(
+    posting_data,
+    limit,
+    postings_count,
+    deltaTF_size,
+    position_count_size,
+):
+    doc_ids = np.zeros(min(postings_count, limit), dtype=np.int32)
+    term_frequencies = np.zeros(min(postings_count, limit), dtype=np.int32)
+    position_counts = np.zeros(min(postings_count, limit), dtype=np.int32)
+
+    current_doc_id = 0
+    current_pos = 0
+
+    for i in range(min(postings_count, limit)):
+        delta = from_bytes(posting_data[current_pos : current_pos + 4])
+        term_frequency = from_bytes(
+            posting_data[current_pos + 4 : current_pos + 4 + 2],
+        )
+        position_count = from_bytes(
+            posting_data[
+                current_pos + deltaTF_size : current_pos
+                + deltaTF_size
+                + position_count_size
+            ],
+        )
+
+        current_pos += position_count_size + deltaTF_size
+        current_doc_id += delta
+
+        doc_ids[i] = current_doc_id
+        term_frequencies[i] = term_frequency
+        position_counts[i] = position_count
+
+    return doc_ids, term_frequencies, position_counts
 
 
 class MMappedFile:
@@ -173,15 +231,15 @@ class TermCache:
         self.freq_threshold = 10_000
         self.max_size = 1_000_000
 
-    def get(self, term: str):
-        return self.cache.get(term, None)
+    def get(self, term: str, positions=False):
+        return self.cache.get((term, positions), None)
 
-    def put(self, term: str, term_obj):
+    def put(self, term: str, term_obj, positions=False):
         if len(self.cache) > 100:
             self.cache.popitem(last=False)
 
         if term_obj.document_frequency > self.freq_threshold:
-            self.cache[term] = term
+            self.cache[(term, positions)] = term
 
 
 class ShardWorker:
@@ -257,36 +315,32 @@ class ShardWorker:
         term_frequencies = []
         all_positions = []
 
-        for _ in range(postings_count):
-            if len(doc_ids) >= limit:
-                break
-
-            delta, term_frequency = struct.unpack(
-                deltaTF_fmt,
-                posting_mmap.read(deltaTF_size),
-            )
-            current_doc_id += delta
-
-            position_count = struct.unpack(
-                position_count_fmt,
-                posting_mmap.read(position_count_size),
-            )[0]
-
-            if offset != -1 and positions:
-                position_data = position_mmap.read(position_count * position_delta_size)
-                deltas = np.frombuffer(position_data, dtype=position_delta_fmt)
-                _positions = fast_cumsum(deltas).tolist()
-
-                all_positions.append(_positions)
-            else:
-                all_positions.append(0)
-
-            doc_ids.append(current_doc_id)
-            term_frequencies.append(term_frequency)
-        logger.info(f"Time taken: {time.time() - start} in shard {shard} for {term}")
-        print(
-            f"Time taken: {time.time() - start} in shard {shard} for {term} with all_positions={all_positions[:5]} positions={positions} offset={offset} pos_offset={pos_offset} limit={limit}"
+        posting_data = posting_mmap.read(
+            (deltaTF_size + position_count_size) * postings_count
         )
+        posting_data = np.frombuffer(posting_data, dtype=np.uint8)
+
+        doc_ids, term_frequencies, position_counts = process_posting_block(
+            posting_data,
+            limit,
+            postings_count,
+            deltaTF_size,
+            position_count_size,
+        )
+
+        if offset != -1 and positions:
+            for i in range(len(doc_ids)):
+                position_count = position_counts[i].item()
+                if position_count == 0:
+                    all_positions.append(np.array([], dtype=np.uint16))
+                    continue
+
+                position_data = position_mmap.read(position_count * position_delta_size)
+                deltas = np.frombuffer(position_data, dtype=np.uint16)
+                all_positions.append(fast_cumsum(deltas).tolist())
+
+        logger.info(f"Time taken: {time.time() - start} in shard {shard} for {term}")
+        print(f"Time taken: {time.time() - start} in shard {shard} for {term}")
 
         return shard, doc_ids, term_frequencies, all_positions
 
@@ -524,7 +578,7 @@ class OnDiskIndex(IndexBase):
             term (str): The term to retrieve
             positions (bool): Whether to include positions in the term object
         """
-        cached_term = self.term_cache.get(term)
+        cached_term = self.term_cache.get(term, positions=positions)
         logger.info(f"Term {term} not found in cache")
         if cached_term is not None:
             return cached_term
@@ -551,7 +605,7 @@ class OnDiskIndex(IndexBase):
         for future in results:
             ret_term = self._build_term(ret_term, future, positions=positions)
 
-        self.term_cache.put(term, ret_term)
+        self.term_cache.put(term, ret_term, positions=positions)
         logger.info(
             f"GET TERM: time taken: {time.time() - start} with positions={positions}"
         )
