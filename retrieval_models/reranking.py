@@ -25,20 +25,21 @@ class Reranker:
             return retrieved_documents
 
         # Features for ranking
-        features = ["score", "viewcount", "favoritecount", "commentcount", "reputation_user", "days_since_creation"]
+        features = ["score", "viewcount",  "commentcount", "reputation_user", "days_since_creation"]
 
         # Normalize features
         scaler = MinMaxScaler()
         metadata_df[features] = scaler.fit_transform(metadata_df[features])
 
+
         # Compute ranking score
         metadata_df["ranking_score"] = (
             (metadata_df["score"] * 1.5) +  # Strong weight on upvotes
             (metadata_df["viewcount"] * 1) +  # Normalize view counts
-            (metadata_df["favoritecount"] * 1) +  # Prioritize favorited posts
+            #(metadata_df["favoritecount"] * 1) +  # Prioritize favorited posts
             (metadata_df["commentcount"] * 1.5) +  # Active discussions indicate usefulness
             (metadata_df["reputation_user"] * 1.5) +  # Normalize reputation for fair scaling
-            (metadata_df["days_since_creation"] * 2)  # Boost newer documents
+            (metadata_df["days_since_creation"] * 2)  # Boost newer documents - this actually might not matter this much
         )
 
         # Sort by ranking score (descending order)

@@ -101,8 +101,8 @@ class EmbeddingModel:
         if word in self.word_to_index:
             return self.embeddings[self.word_to_index[word]]  # Retrieve from precomputed embeddings
         else:
-            print(f"Word '{word}' not found in precomputed embeddings. Computing on the fly?...")
-            return self.get_embeddings_batch([word])[0]  # Compute dynamically
+            print(f"Word '{word}' not found in precomputed embeddings")
+            return []  # Compute dynamically
 
     def find_similar_words(self, word, top_k=5):
         """

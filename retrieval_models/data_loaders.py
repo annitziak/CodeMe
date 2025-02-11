@@ -17,8 +17,11 @@ class Index:
         self.doc_lengths = {}
 
         self.load_inverted_index_positions()
+        print("done loading index positions")
         self.find_vocab()
+        print("done finding vocab")
         self.load_doc_lengths()
+        print("done loading doc lengths")
 
     def load_inverted_index_positions(self):
         """

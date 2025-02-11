@@ -9,13 +9,13 @@ def preprocess_query(query: str) -> list:
     """
     return query.lower().split()
 
-def query_expansion(preprocessed_query: list, embedding_model: EmbeddingModel) -> list:
+def query_expansion(preprocessed_query: list, embedding_model: EmbeddingModel, top_k=1) -> list:
     """
     Expand the query with synonyms or related terms based on precomputed embeddings.
     """
     extra_terms = []
     for word in preprocessed_query:
-        extra_terms.append(embedding_model.find_similar_words(word, top_k=1))
+        extra_terms.append(embedding_model.find_similar_words(word, top_k))
     return list(set(extra_terms))  # Ensure unique terms
 
 
@@ -47,7 +47,7 @@ def compute_bm25(token, index, k1=1.5, b=0.75):
     return scores
 
 
-def retrieval_function(query, index, embedding_model=None, expansion=False):
+def retrieval_function(query, index, embedding_model=None, expansion=False, k=10):
     """
     Retrieve documents based on a query using BM25, with optional query expansion.
 
@@ -82,7 +82,7 @@ def retrieval_function(query, index, embedding_model=None, expansion=False):
         return "No relevant documents found for this query."
 
     # Sort documents by score and return top 10 results
-    ranked_results = sorted(aggregated_scores.items(), key=lambda x: x[1], reverse=True)[:10]
+    ranked_results = sorted(aggregated_scores.items(), key=lambda x: x[1], reverse=True)[:k]
 
     # Return only document IDs, ignoring scores
     return [doc[0] for doc in ranked_results]
