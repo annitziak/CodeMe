@@ -2,14 +2,14 @@ import psycopg2
 import logging
 
 from psycopg2 import extras
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+# load_dotenv()
 
 
 class DBConnection:

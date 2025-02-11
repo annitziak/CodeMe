@@ -3,3 +3,10 @@ venv
 .env
 __pycache__
 *.egg-info
+scripts/create_dump_with_path.sql
+.vscode
+index.txt
+tokenizer.json
+
+Cargo.lock
+target
