@@ -3,16 +3,14 @@ import pprint
 
 from preprocessing import NormalTextBlock, LinkBlock, CodeBlock, Block
 from preprocessing.parser import DefaultParserInterface, HTMLParserInterface
+from preprocessing.tokenizer import (
+    DEFAULT_TOKENIZER_KWARGS,
+    DEFAULT_NORMALIZER_OPERATIONS,
+)
 
 # from preprocessing.original_tokenizer import Tokenizer
 from preprocessing.tokenizer import Tokenizer
 
-from preprocessing.normalizer import (
-    StopWordNormalizer,
-    StemmingNormalizer,
-    LowerCaseNormalizer,
-    UnicodeToAsciiNormalizer,
-)
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -36,20 +34,12 @@ class Preprocessor:
         self,
         parser_kwargs={},
         tokenizer_kwargs={
-            "text_normalizer_operations": [
-                LowerCaseNormalizer(),
-                StopWordNormalizer(stop_words_file="preprocessing/stop_words.txt"),
-                StemmingNormalizer(),
-                UnicodeToAsciiNormalizer(),
-            ],
-            "code_normalizer_operations": [
-                LowerCaseNormalizer(),
-                UnicodeToAsciiNormalizer(),
-            ],
-            "link_normalizer_operations": [
-                LowerCaseNormalizer(),
-                UnicodeToAsciiNormalizer(),
-            ],
+            "text_tokenizer_kwargs": DEFAULT_TOKENIZER_KWARGS,
+            "code_tokenizer_kwargs": DEFAULT_TOKENIZER_KWARGS,
+            "link_tokenizer_kwargs": DEFAULT_TOKENIZER_KWARGS,
+            "text_normalizer_operations": DEFAULT_NORMALIZER_OPERATIONS,
+            "code_normalizer_operations": DEFAULT_NORMALIZER_OPERATIONS,
+            "link_normalizer_operations": DEFAULT_NORMALIZER_OPERATIONS,
         },
     ):
         self.parser = BuildParser(**parser_kwargs)
@@ -114,6 +104,7 @@ if __name__ == "__main__":
                     break
     else:
         test_htmls = [
+            """<html> printf("The default interface CGPath2D is %s\\n cgPATHcg CGPath cgPATH PATHcg</html>""",
             """<html>\n  <body><p>You àb̰àappleàb̰ should implement <a href="https://api.drupal.org/api/drupal/modules%21node%21node.api.php/function/hook_node_presave/7" rel="nofollow"><code>hook_node_presave</code></a> to set the values you need to change there.</p>\n\n<p>Code sample:</p>\n\n<pre><code>function MODULE_node_presave($node) {\n    if($node-&gt;type === \'MY_NODE_TYPE\') \n        $node-&gt;uid = 1;\n}\n</code></pre>\n</body>\n</html>\n""",
             """
             <html><body>
