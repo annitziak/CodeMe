@@ -338,6 +338,28 @@ class IndexMerger:
             assert len(offset_files) == len(shard_files) and len(position_files) == len(
                 shard_files
             )
+            logger.info(f"Skipping shard with files less than 2: {shard_files}")
+            if len(shard_files) == 1:
+                basename = os.path.basename(shard_files[0])
+                if basename.count("_") == 2:
+                    shutil.move(
+                        shard_files[0],
+                        os.path.join(
+                            self.index_path, f"{shard_filename}_{shard}.index"
+                        ),
+                    )
+                    shutil.move(
+                        position_files[0],
+                        os.path.join(
+                            self.index_path, f"{shard_filename}_{shard}.position"
+                        ),
+                    )
+                    shutil.move(
+                        offset_files[0],
+                        os.path.join(
+                            self.index_path, f"{shard_filename}_{shard}.offset"
+                        ),
+                    )
             return None, None, None
 
         shard_files = sorted(shard_files, key=lambda x: extract_shard(x))

@@ -174,13 +174,13 @@ class DocumentShardedIndexBuilder:
                     logger.error(f"Error reading {doc_meta}")
 
             curr_min_doc_id = shard_bounds.get(
-                int(shard), [float("inf"), float("-inf")]
+                str(shard), [float("inf"), float("-inf")]
             )[0]
             curr_max_doc_id = shard_bounds.get(
-                int(shard), [float("inf"), float("-inf")]
+                str(shard), [float("inf"), float("-inf")]
             )[1]
 
-            shard_bounds[int(shard)] = [
+            shard_bounds[str(shard)] = [
                 min(curr_min_doc_id, self.min_doc_id),
                 max(curr_max_doc_id, self.max_doc_id),
             ]

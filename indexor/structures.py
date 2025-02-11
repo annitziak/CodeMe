@@ -9,56 +9,24 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 from numba import jit
-from array import array
 
 logger = logging.getLogger(__name__)
 
 
-PostingList = namedtuple(
-    "PostingList", ["doc_id", "doc_term_frequency", "position_idx"]
-)
-
-
-class PositionStore:
-    def __init__(self):
-        self.positions = []
-
-    def add_positions(self, pos_list: list[int], position_idx=-1) -> None:
-        if position_idx != -1:
-            self.positions[position_idx].extend(pos_list)
-            return
-
-        pos_array = array("i", pos_list)
-        self.positions.append(pos_array)
-        return len(self.positions) - 1
-
-    def get_positions(self, pos_id: int) -> list[int]:
-        if pos_id == -1:
-            return []
-
-        return self.positions[pos_id]
-
-    def __getitem__(self, pos_id: int) -> list[int]:
-        return self.get_positions(pos_id)
-
-    def __str__(self):
-        return str(self.positions)
-
-
-position_store = PositionStore()
+PostingList = namedtuple("PostingList", ["doc_id", "doc_term_frequency", "positions"])
 
 
 @dataclass
 class MutablePostingList:
     doc_id: int
     doc_term_frequency: int
-    position_idx: int = -1
+    positions: list[int] = field(default_factory=list)
 
     def update_doc_term_frequency(self, term_frequency: int):
         self.doc_term_frequency += term_frequency
 
     def update_with_positions(self, new_positions: list[int]):
-        position_store.add_positions(new_positions)
+        self.positions.extend(new_positions)
 
 
 @jit(nopython=True, cache=True, fastmath=True)

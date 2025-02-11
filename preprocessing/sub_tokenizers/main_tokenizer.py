@@ -38,6 +38,8 @@ DEFAULT_PUNCTUATION = [
     "#",
     "?",
     '"',
+    "'",
+    "\\",
 ]
 
 
@@ -55,8 +57,6 @@ class PunctuationHandler:
         self.re = re.compile(f"[{pattern}]")
 
     def __call__(self, text):
-        print(self.punctuation_behaviour)
-        print(self.re)
         if self.punctuation_behaviour == "remove-split":
             return self.re.sub(r"  ", text)
         elif self.punctuation_behaviour == "keep":

@@ -239,7 +239,7 @@ class IndexBuilder:
             cur = conn.get_cursor(name=f"index_builder_{shard}")
             # include tags???
             debug = "LIMIT 100" if self.debug else ""
-            select_query = f"""SELECT id, title, body FROM posts WHERE id >= {start} AND id <= {end} WHERE posttypeid=1 ORDER BY id ASC {debug}"""
+            select_query = f"""SELECT id, title, body FROM posts WHERE id >= {start} AND id <= {end} ORDER BY id ASC {debug}"""
             cur.execute(select_query)
             logger.info(
                 "Processing shard %d: %d-%d with query %s",

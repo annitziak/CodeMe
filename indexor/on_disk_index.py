@@ -810,7 +810,8 @@ class OnDiskIndex(IndexBase):
 
         index_path = os.path.join(path, "index.txt")
         with open(index_path, "w") as f:
-            for term in self.term_fst.keys():
+            sorted_terms = sorted(self.term_fst.keys())
+            for term in sorted_terms:
                 if isinstance(term, bytes):
                     term = term.decode("utf-8")
 
@@ -824,13 +825,12 @@ class OnDiskIndex(IndexBase):
         logger.info(f"Index written to {index_path}")
 
         doc_meta_path = os.path.join(path, "doc_metadata.txt")
+        sorted_doc_ids = sorted([int(x) for x in self.doc_fst.keys()])
         with open(doc_meta_path, "w") as f:
-            for doc_id in self.doc_fst.keys():
+            for doc_id in sorted_doc_ids:
                 if isinstance(doc_id, bytes):
                     doc_id = doc_id.decode("utf-8")
 
-                value = self.doc_fst.get(doc_id)
-                shard, offset = struct.unpack(SIZE_KEY["offset_shard"], value[0])
                 doc_length = self.get_document_length(int(doc_id))
                 f.write(f"{doc_id}: {doc_length}\n")
 
@@ -840,7 +840,8 @@ class OnDiskIndex(IndexBase):
         docs = self.get_all_documents()
         logger.info(f"Writing document terms to {doc_terms}")
         with open(doc_terms, "w") as f:
-            for doc_id, terms in docs.items():
+            for doc_id in sorted_doc_ids:
+                terms = docs[doc_id]
                 f.write(f"{doc_id} : ")
                 term_string = "\t".join(
                     [

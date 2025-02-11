@@ -6,6 +6,7 @@ from preprocessing.parser import DefaultParserInterface, HTMLParserInterface
 from preprocessing.tokenizer import (
     DEFAULT_TOKENIZER_KWARGS,
     DEFAULT_NORMALIZER_OPERATIONS,
+    DEFAULT_PRE_TEXT_NORMALIZER_OPERATIONS,
 )
 
 # from preprocessing.original_tokenizer import Tokenizer
@@ -34,12 +35,15 @@ class Preprocessor:
         self,
         parser_kwargs={},
         tokenizer_kwargs={
+            "pre_text_normalizer_operations": DEFAULT_PRE_TEXT_NORMALIZER_OPERATIONS,
+            "pre_code_normalizer_operations": DEFAULT_PRE_TEXT_NORMALIZER_OPERATIONS,
+            "pre_link_normalizer_operations": DEFAULT_PRE_TEXT_NORMALIZER_OPERATIONS,
             "text_tokenizer_kwargs": DEFAULT_TOKENIZER_KWARGS,
             "code_tokenizer_kwargs": DEFAULT_TOKENIZER_KWARGS,
             "link_tokenizer_kwargs": DEFAULT_TOKENIZER_KWARGS,
-            "text_normalizer_operations": DEFAULT_NORMALIZER_OPERATIONS,
-            "code_normalizer_operations": DEFAULT_NORMALIZER_OPERATIONS,
-            "link_normalizer_operations": DEFAULT_NORMALIZER_OPERATIONS,
+            "post_text_normalizer_operations": DEFAULT_NORMALIZER_OPERATIONS,
+            "post_code_normalizer_operations": DEFAULT_NORMALIZER_OPERATIONS,
+            "post_link_normalizer_operations": DEFAULT_NORMALIZER_OPERATIONS,
         },
     ):
         self.parser = BuildParser(**parser_kwargs)
@@ -67,6 +71,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=1000)
     parser.add_argument("--use-test-data", action="store_true")
+    parser.add_argument("--id", type=int, default=None)
     parser.add_argument(
         "--inspect-block", choices=["normal", "link", "code"], default=None
     )
@@ -86,7 +91,11 @@ if __name__ == "__main__":
 
     if not args.use_test_data:
         with db_connection as conn:
-            select_query = "SELECT id, body FROM posts LIMIT 1000"
+            if args.id is None:
+                select_query = "SELECT id, body FROM posts LIMIT 1000"
+            else:
+                select_query = f"SELECT id, body FROM posts WHERE id = {args.id}"
+
             conn.execute(select_query, commit=False)
             while True:
                 posts = conn.fetchmany(size=1)
@@ -104,7 +113,15 @@ if __name__ == "__main__":
                     break
     else:
         test_htmls = [
-            """<html> printf("The default interface CGPath2D is %s\\n cgPATHcg CGPath cgPATH PATHcg</html>""",
+            """<html>
+             <p>An exmaple:</p>
+             <pre><code>plot(1:10,rand(1,10))
+             set(0,'defaulttextinterpreter','latex');
+             ylabel('$\hat{g}$');
+             </code></pre>
+
+            <p><code>apigee:paramName="foo&amp;#091;bar&amp;#093;"​</code></p>  <p>Replication uses a number of _bulk_doc requests to send over all documents. Each request will produce some “garbage” data, as the underlying b+-tree is being rewritten to accommodate each new batch of documents.</p></html>""",
+            """<html> printf("The default interface is %s\\n cgPATHcg CGPath cgPATH PATHcg</html>""",
             """<html>\n  <body><p>You àb̰àappleàb̰ should implement <a href="https://api.drupal.org/api/drupal/modules%21node%21node.api.php/function/hook_node_presave/7" rel="nofollow"><code>hook_node_presave</code></a> to set the values you need to change there.</p>\n\n<p>Code sample:</p>\n\n<pre><code>function MODULE_node_presave($node) {\n    if($node-&gt;type === \'MY_NODE_TYPE\') \n        $node-&gt;uid = 1;\n}\n</code></pre>\n</body>\n</html>\n""",
             """
             <html><body>

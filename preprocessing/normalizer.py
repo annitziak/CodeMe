@@ -68,8 +68,13 @@ class UnicodeToAsciiNormalizer(SubNormalizer):
     Removes accents and other diacritics
     """
 
-    def normalize_term(self, term: Term):
-        term.term = unidecode(term.term)
+    def normalize_term(self, term: Term | str):
+        if isinstance(term, Term):
+            term.term = unidecode(term.term)
+        elif isinstance(term, str):
+            term = unidecode(term)
+
+        return term
 
 
 class Normalizer:
@@ -80,11 +85,17 @@ class Normalizer:
         return self.normalize(*args, **kwargs)
 
     def normalize(self, terms, filter_empty_terms=True):
+        if isinstance(terms, str):
+            for operation in self.operations:
+                terms = operation.normalize_term(terms)
+            return terms
+
         new_terms = []
         for term in terms:
             term.term = str(term.term).strip()
             for operation in self.operations:
                 operation.normalize_term(term)
+            term.term = term.term.strip()
 
             if filter_empty_terms and len(term.term) > 0:
                 new_terms.append(term)
