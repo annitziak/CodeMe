@@ -1,5 +1,4 @@
 import logging
-import copy
 
 from preprocessing import CodeBlock, LinkBlock, NormalTextBlock, TextSize
 from lxml import etree
@@ -16,7 +15,7 @@ class DefaultParserInterface:
 
     def parse(self, data: str):
         text_block = NormalTextBlock(text=data, block_id=0, text_size=TextSize.P)
-        self.text_blocks.append(text_block)
+        self.text_blocks = [text_block]
 
         return self.text_blocks
 
@@ -120,9 +119,6 @@ class HTMLParserInterface:
         id: int = -1,
         **kwargs,
     ):
-        if parent_block is not None:
-            parent_block = copy.deepcopy(parent_block)
-
         if tag == "code":
             if parent_tag == "pre":
                 text_block = CodeBlock(

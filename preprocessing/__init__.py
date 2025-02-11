@@ -19,6 +19,9 @@ class Block:
     block_id: int
 
     words: list[str] = field(default_factory=list)
+    block_length = -1  # original number of words in the block (words can be deleted due to stopword removal)
+    start_char_offset = -1
+    end_char_offset = -1
 
     def update(self, block, *args, **kwargs):
         if block is None:
@@ -67,7 +70,9 @@ class NormalTextBlock(Block):
     text_size: int = TextSize.UNK
 
     def update(self, *args, **kwargs):
-        super().update(self, *args, **kwargs)
+        super().update(*args, **kwargs)
+
+        return self
 
 
 @dataclass
@@ -76,7 +81,9 @@ class LinkBlock(NormalTextBlock):
     alt_text: str = ""
 
     def update(self, *args, **kwargs):
-        super().update(self, *args, **kwargs)
+        super().update(*args, **kwargs)
+
+        return self
 
 
 @dataclass
@@ -84,7 +91,9 @@ class CodeBlock(Block):
     in_line: bool = False
 
     def update(self, *args, **kwargs):
-        super().update(self, *args, **kwargs)
+        super().update(*args, **kwargs)
+
+        return self
 
 
 @dataclass
