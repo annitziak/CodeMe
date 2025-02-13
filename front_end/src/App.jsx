@@ -1,14 +1,16 @@
-import { Button } from "./components/ui/button";
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import SearchPage from "./pages/SearchPage";
+import ResultsPage from "./pages/ResultsPage";
 
-const App = () => {
+function App() {
   return (
-    <div>
-      <div className="container bg-red-500">
-        <h1 className="text-8xl">Hellooooo</h1>
-        <Button variant="outline">Button</Button>
-      </div>
-    </div>
+    <Router>
+      <Routes>
+        <Route path="/" element={<SearchPage />} />  {/* Default route */}
+        <Route path="/search" element={<ResultsPage />} />
+      </Routes>
+    </Router>
   );
-};
+}
 
 export default App;
