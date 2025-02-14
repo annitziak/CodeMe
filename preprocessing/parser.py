@@ -235,9 +235,12 @@ if __name__ == "__main__":
     parser = HTMLParserInterface()
     db_connection = DBConnection(DB_PARAMS)
 
+    with open(".cache/test_documents.txt", "w") as f:
+        f.write("id\ttitle\tbody\n")
+
     if not args.use_test_data:
         with db_connection as conn:
-            select_query = "SELECT id, body FROM posts LIMIT 1000"
+            select_query = "SELECT id, title, body FROM posts WHERE ID=419044 OR ID=419085 LIMIT 1000"
             conn.execute(select_query, commit=False)
             while True:
                 posts = conn.fetchmany(size=1)
@@ -246,12 +249,19 @@ if __name__ == "__main__":
                     break
 
                 for post in posts:
-                    post_id, body = post
-                    print(body)
-                    parser.parse(body)
+                    post_id, title, body = post
+                    text_blocks = parser.parse(body)
                     print(f"Post ID: {post_id}")
-                    print(f"Body: {parser.get_data()}")
+                    print(f"Body:\n {text_blocks}")
+
+                    title = title + " " if title is not None else ""
+                    print(title + " ".join([x.text for x in text_blocks]))
                     print("\n")
+
+                    with open(".cache/test_documents.txt", "a") as f:
+                        f.write(
+                            f"{post_id}\t{title}\t{' '.join([x.text for x in text_blocks])}\n"
+                        )
 
                 should_continue = input("Continue? [(y)/n]: ")
                 if should_continue.lower() == "n":

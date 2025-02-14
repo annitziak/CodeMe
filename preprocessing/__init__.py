@@ -100,6 +100,7 @@ class CodeBlock(Block):
 class Term:
     term: str = ""
     original_term: str = ""  # before stemming/cleaning
-    position: int = -1  # for phrase and word proximity
+    start_position: int = -1
+    end_position: int = -1
     start_char_offset: int = -1  # highlighting search snippets
     end_char_offset: int = -1  # highlighting search snippets

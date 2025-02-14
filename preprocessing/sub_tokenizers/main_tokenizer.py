@@ -55,23 +55,104 @@ class PunctuationHandler:
         pattern = "".join(self.punctuation)
 
         self.re = re.compile(f"[{pattern}]")
+        if self.punctuation_behaviour == "keep-split":
+            self.re = re.compile(f"([{pattern}])")
 
-    def __call__(self, text):
+    def __call__(self, positions: list[Term]):
         if self.punctuation_behaviour == "remove-split":
-            return self.re.sub(r"  ", text)
+            return self._handle_remove_split(positions, self.re)
         elif self.punctuation_behaviour == "keep":
-            return text
+            return positions
         elif self.punctuation_behaviour == "remove":
-            return self.re.sub("", text)
+            return self._handle_remove(positions, self.re)
         elif self.punctuation_behaviour == "keep-split":
             # record the words that should also be split
-            raise NotImplementedError(
-                "Punctuation behaviour not implemented. To keep the original and tokenized punctuation"
-            )
+            return self._handle_keep_split(positions, self.re)
         else:
             raise ValueError(
                 f"Unknown punctuation behaviour: {self.punctuation_behaviour}"
             )
+
+    def _handle_remove_split(self, positions: list[Term], regex: str | re.Pattern):
+        new_positions = []
+        for pos in positions:
+            parts = regex.split(pos.term)
+            current_pos = pos.start_position
+            current_offset = pos.start_char_offset
+
+            for part in parts:
+                if part:
+                    new_positions.append(
+                        Term(
+                            term=part,
+                            original_term=pos.original_term,
+                            start_position=current_pos,
+                            end_position=current_pos,
+                            start_char_offset=current_offset,
+                            end_char_offset=current_offset + len(part),
+                        )
+                    )
+                    current_pos += 1
+                    current_offset += len(part) + 1
+
+        return new_positions
+
+    def _handle_keep_split(self, positions: list[Term], regex: str | re.Pattern):
+        new_positions = []
+        for pos in positions:
+            new_positions.append(
+                Term(
+                    term=pos.term,
+                    original_term=pos.original_term,
+                    start_position=pos.start_position,
+                    end_position=pos.end_position,
+                    start_char_offset=pos.start_char_offset,
+                    end_char_offset=pos.end_char_offset,
+                )
+            )
+            parts = regex.split(pos.term)
+            current_pos = pos.start_position
+            current_offset = pos.start_char_offset
+
+            for part in parts:
+                if part:
+                    new_positions.append(
+                        Term(
+                            term=part,
+                            original_term=pos.original_term,
+                            start_position=current_pos,
+                            end_position=current_pos,
+                            start_char_offset=current_offset,
+                            end_char_offset=current_offset + len(part),
+                        )
+                    )
+                    current_pos += 1
+                    current_offset += len(part) + 1
+        return new_positions
+
+    def _handle_remove(self, positions: list[Term], regex: str | re.Pattern):
+        new_positions = []
+        for pos in positions:
+            parts = regex.split(pos.term)
+            current_pos = pos.start_position
+            current_offset = pos.start_char_offset
+
+            new_term = "".join(parts)
+            if new_term:
+                new_positions.append(
+                    Term(
+                        term=new_term,
+                        original_term=pos.original_term,
+                        start_position=current_pos,
+                        end_position=current_pos,
+                        start_char_offset=current_offset,
+                        end_char_offset=current_offset + len(new_term),
+                    )
+                )
+                current_pos += 1
+                current_offset += len(new_term)
+
+        return new_positions
 
 
 class MainTokenizer:
@@ -95,7 +176,7 @@ class MainTokenizer:
         """
         Args:
             mixed_token_behaviour (str): How to handle mixed tokens (e.g. "abc123def")
-                `split` - split the tokens into words (e.g. "abc 123 def")
+                `split` - split the tokens into words and remove numbers (e.g. "abc 123 def")
                 `keep` - keep the tokens as is (e.g. "abc123def")
                 `keep-split` - keep the tokens as is but also split them (e.g. "abc 123 def" & "abc123def")
             snake_case_behaviour (str): How to handle snake case tokens (e.g. "snake_case")
@@ -132,6 +213,8 @@ class MainTokenizer:
         self.url_re = re.compile(r"(?:(http|https)://[^\s]+)|(?:www\.[^\s]+)")
         self.contraction_re = re.compile(r"(\b\w+)'(\w+\b)")
 
+        self.whitespace_re = re.compile(r"\s+")
+
         self.use_bpe = use_bpe
         self.bpe_length_threshold = bpe_length_threshold
 
@@ -166,194 +249,216 @@ class MainTokenizer:
         return self.tokenize(*args, **kwargs)
 
     def tokenize(self, text, is_orderable=True):
-        text = self._handle_links(text)
-        text = self._handle_contractions(text)
-        text = self._split_mixed_tokens(text)
-        text = self._handle_digits(text)
-        words = self._split_symbols(text)
-        words = self._split_camel_case(words)
-        words = [
-            split_word for word in words for split_word in self._split_snake_case(word)
-        ]
-        words = [re.sub(r"\s+|\n", " ", word) for word in words]
+        words = self._initial_split(text)
+        words = self._handle_links(words)
+        words = self._handle_contractions(words)
+        words = self._handle_mixed_tokens(words)
+        words = self._handle_digits(words)
+        words = self._split_symbols(words)
+        words = self._handle_camel_case(words)
+        words = self._split_snake_case(words)
 
-        tokens = []
-        curr_position = 0
-        for word in words:
-            word = str(word).strip()
-            if len(word) == 0:
-                continue
+        return words
 
-            if self.should_use_bpe(word):
-                tokens.extend(self._split_bpe(word))
-            else:
-                tokens.append(
+    def _initial_split(self, text: str):
+        last_end = 0
+        positions = []
+        for match in self.whitespace_re.finditer(text):
+            start, end = match.span()
+            if start > last_end:
+                token_text = text[last_end:start]
+                positions.append(
                     Term(
-                        term=word,
-                        original_term=word,
-                        position=curr_position if is_orderable else -1,
-                        start_char_offset=0,
-                        end_char_offset=0,
+                        term=token_text,
+                        original_term=token_text,
+                        start_position=len(positions),
+                        end_position=len(positions),
+                        start_char_offset=last_end,
+                        end_char_offset=start,
                     )
                 )
+            last_end = end
 
-                if is_orderable:
-                    curr_position += 1
-
-        return tokens
-
-    def _handle_digits(self, text):
-        if self.digit_behaviour == "remove":
-            return re.sub(r"(\d+)", r" ", text)
-        elif self.digit_behaviour == "keep":
-            return text
-
-    def _handle_contractions(self, text):
-        if self.contractions_behaviour == "split":
-            return self.contraction_re.sub(r"\1 \2", text)
-        elif self.contractions_behaviour == "keep":
-            return text
-        elif self.contractions_behaviour == "remove":
-            return self.contraction_re.sub(r"\1\2", text)
-        elif self.contractions_behaviour == "keep-split":
-            # record the words that should also be split
-            raise NotImplementedError(
-                "Contractions behaviour not implemented. To keep the original and tokenized contractions"
+        if last_end < len(text):
+            token_text = text[last_end:]
+            positions.append(
+                Term(
+                    term=token_text,
+                    original_term=token_text,
+                    start_position=len(positions),
+                    end_position=len(positions),
+                    start_char_offset=last_end,
+                    end_char_offset=len(text),
+                )
             )
+
+        return positions
+
+    def _handle_digits(self, positions: list[Term]):
+        if self.digit_behaviour == "remove":
+            new_positions = []
+            for pos in positions:
+                new_term = re.sub(r"\d", "", pos.term)
+                if new_term:
+                    new_positions.append(
+                        Term(
+                            term=new_term,
+                            original_term=pos.original_term,
+                            start_position=pos.start_position,
+                            end_position=pos.end_position,
+                            start_char_offset=pos.start_char_offset,
+                            end_char_offset=pos.end_char_offset,
+                        )
+                    )
+            return new_positions
+        elif self.digit_behaviour == "keep":
+            return positions
+
+    def _handle_contractions(self, positions: list[Term]):
+        if self.contractions_behaviour == "split":
+            return self._handle_general_split(positions, self.contraction_re)
+        elif self.contractions_behaviour == "keep":
+            return positions
+        elif self.contractions_behaviour == "remove":
+            new_positions = []
+            for pos in positions:
+                new_positions.append(
+                    Term(
+                        term=self.contraction_re.sub(r"\1\2", pos.term),
+                        original_term=pos.original_term,
+                        start_position=pos.start_position,
+                        end_position=pos.end_position,
+                        start_char_offset=pos.start_char_offset,
+                        end_char_offset=pos.end_char_offset,
+                    )
+                )
+            return new_positions
+        elif self.contractions_behaviour == "keep-split":
+            return self._handle_general_keep_split(positions, self.contraction_re)
         else:
             raise ValueError(
                 f"Unknown contractions behaviour: {self.contractions_behaviour}"
             )
 
-    def _handle_links(self, text):
+    def _handle_links(self, positions: list[Term]):
+        new_positions = []
         if self.link_behaviour == "remove":
-            subbed = re.sub(self.url_re, "", text)
-            return re.sub(self.email_address_re, "", subbed)
-        elif self.link_behaviour == "keep":
-            return text
-
-        res = [self.url_re, self.email_address_re]
-        for regex_exp in res:
-            for match in regex_exp.finditer(text):
-                word = match.group()
-                if self.link_behaviour == "keep-split":
-                    raise NotImplementedError(
-                        "Link behaviour not implemented. To keep the original and tokenized link"
-                    )
-                elif self.link_behaviour == "split":
-                    raise NotImplementedError(
-                        "Link behaviour not implemented. To only keep the tokenized link"
-                    )
+            for pos in positions:
+                if self.url_re.match(pos.term) or self.email_address_re.match(pos.term):
+                    continue
                 else:
-                    raise ValueError(f"Unknown link behaviour: {self.link_behaviour}")
+                    new_positions.append(pos)
+        elif self.link_behaviour == "keep":
+            return positions
+        else:
+            raise ValueError(f"Unknown link behaviour: {self.link_behaviour}")
 
-    def should_use_bpe(self, word):
-        return self.use_bpe and len(word) > self.bpe_length_threshold
+        return new_positions
 
-    def _split_bpe(self, text):
-        identifiers = self.tokenizer.encode(text)
-        tokens = []
-        for identifier in identifiers:
-            tokens.append(
-                Term(
-                    term=identifier,
-                    original_term=text,
-                    position=len(tokens),
-                    start_char_offset=0,
-                    end_char_offset=0,
-                )
-            )
-
-        return tokens
-
-    def _split_snake_case(self, text):
+    def _split_snake_case(self, positions: list[Term]):
         if self.snake_case_behaviour == "split":
-            return text.split("_")
+            return self._handle_general_split(positions, r"_")
         elif self.snake_case_behaviour == "keep":
-            return text
+            return positions
         elif self.snake_case_behaviour == "keep-split":
             # record the words that should also be split
-            raise NotImplementedError(
-                "Snake case behaviour not implemented. To keep the original and tokenized snake case"
-            )
+            return self._handle_general_keep_split(positions, r"_")
         else:
             raise ValueError(
                 f"Unknown snake case behaviour: {self.snake_case_behaviour}"
             )
 
-    def _split_camel_case(self, text):
-        if len(text) == 0:
-            return []
+    def _handle_general_split(self, positions: list[Term], regex: str | re.Pattern):
+        new_positions = []
+        for pos in positions:
+            parts = regex.split(pos.term)
+            current_pos = pos.start_position
+            current_offset = pos.start_char_offset
 
+            for part in parts:
+                if part:
+                    new_positions.append(
+                        Term(
+                            term=part,
+                            original_term=pos.original_term,
+                            start_position=current_pos,
+                            end_position=current_pos,
+                            start_char_offset=current_offset,
+                            end_char_offset=current_offset + len(part),
+                        )
+                    )
+                    current_pos += 1
+                    current_offset += len(part) + 1
+
+        return new_positions
+
+    def _handle_general_keep_split(
+        self, positions: list[Term], regex: str | re.Pattern
+    ):
+        new_positions = []
+        for pos in positions:
+            new_positions.append(
+                Term(
+                    term=pos.term,
+                    original_term=pos.original_term,
+                    start_position=pos.start_position,
+                    end_position=pos.end_position,
+                    start_char_offset=pos.start_char_offset,
+                    end_char_offset=pos.end_char_offset,
+                )
+            )
+            parts = regex.split(pos.term)
+            current_pos = pos.start_position
+            current_offset = pos.start_char_offset
+
+            for part in parts:
+                if part:
+                    new_positions.append(
+                        Term(
+                            term=part,
+                            original_term=pos.original_term,
+                            start_position=current_pos,
+                            end_position=current_pos,
+                            start_char_offset=current_offset,
+                            end_char_offset=current_offset + len(part),
+                        )
+                    )
+                    current_pos += 1
+                    current_offset += len(part) + 1
+
+        return new_positions
+
+    def _handle_camel_case(self, positions: list[Term]):
         if self.camel_case_behaviour == "split":
-
-            def process_parts(parts):
-                result = []
-                for part in parts:
-                    if part.isupper() and len(part) > 2:
-                        # Find where uppercase run ends
-                        i = 0
-                        while i < len(part) and part[i].isupper():
-                            i += 1
-                        if i < len(part):  # Found lowercase
-                            result.extend([part[:i], part[i:]])
-                        else:
-                            result.append(part)
-                    else:
-                        result.append(part)
-                return result
-
-            # Split and process
-            parts = " ".join(re.split(self.camel_case_re, text)).split()
-            return parts
-
+            return self._handle_general_split(positions, self.camel_case_re)
         elif self.camel_case_behaviour == "keep":
-            return text.split(" ")
+            return positions
         elif self.camel_case_behaviour == "keep-split":
             # record the words that should also be split
-            raise NotImplementedError(
-                "Camel case behaviour not implemented. To keep the original and tokenized camel case"
-            )
+            return self._handle_general_keep_split(positions, self.camel_case_re)
         else:
             raise ValueError(
                 f"Unknown camel case behaviour: {self.camel_case_behaviour}"
             )
 
-    def _split_mixed_tokens(self, text):
+    def _handle_mixed_tokens(self, positions: list[Term]):
         if self.mixed_token_behaviour == "split":
-            return re.sub(r"(\d+)", r" \1 ", text)
+            return self._handle_general_split(positions, r"(\d+)")
         elif self.mixed_token_behaviour == "keep":
-            return text
+            return positions
         elif self.mixed_token_behaviour == "keep-split":
             # record the words that should also be split
-            raise NotImplementedError(
-                "Mixed token behaviour not implemented. To keep the original and tokenized mixed token"
-            )
+            return self._handle_general_keep_split(positions, r"(\d+)")
         else:
             raise ValueError(
                 f"Unknown mixed token behaviour: {self.mixed_token_behaviour}"
             )
 
-    def _split_symbols(self, text):
+    def _split_symbols(self, positions: list[Term]):
         for handler in self.punctuation_handlers:
-            text = handler(text)
+            positions = handler(positions)
 
-        return text
-
-    def _add_identifier(self, buffer, tokens, idx):
-        encoded = self._encode(buffer)
-        curr_start = idx - len(buffer)
-        for token in encoded:
-            tokens.append(
-                Term(
-                    term=token,
-                    original_term=buffer,
-                    position=len(tokens),
-                    start_char_offset=curr_start,
-                    end_char_offset=curr_start + len(token),
-                )
-            )
-            curr_start += len(token)
+        return positions
 
     def _encode(self, text):
         return text.split(" ")
