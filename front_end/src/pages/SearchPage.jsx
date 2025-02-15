@@ -10,9 +10,7 @@ export default function SearchPage() {
 
   const handleSearch = () => {
     if (query.trim()) {
-      console.log(query, "query");
-      navigate("/search");
-      // navigate(`/results?query=${encodeURIComponent(query)}`);
+      navigate(`/results?query=${encodeURIComponent(query)}`);
     }
   };
 
@@ -27,22 +25,6 @@ export default function SearchPage() {
         <p className="text-gray-600 mb-6">
           Find code snippets, solutions, and programming insights instantly.
         </p>
-        {/* <div className="relative w-full max-w-2xl">
-          <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
-          <Input
-            type="text"
-            placeholder="Search for coding questions..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="pl-12 pr-32 py-4 text-lg shadow-md rounded-full border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none"
-          />
-          <Button
-            onClick={handleSearch}
-            className="absolute right-3 top-1/2 transform -translate-y-1/2 bg-blue-500 text-white px-6 py-2 rounded-full hover:bg-blue-600"
-          >
-            Search
-          </Button>
-        </div> */}
         <div className="relative flex items-center bg-white shadow-md rounded-full w-full max-w-2xl">
           <Search className="text-gray-400 ml-4" />
           <Input

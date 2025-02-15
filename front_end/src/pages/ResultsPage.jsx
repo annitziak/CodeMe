@@ -1,8 +1,8 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Eye, MessageSquare, ThumbsUp, Filter } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { Search, X, Eye, MessageSquare, ThumbsUp, Filter } from "lucide-react";
 
 const searchResults = [
   {
@@ -25,6 +25,12 @@ const searchResults = [
 ];
 
 const ResultsPage = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const initialQuery = searchParams.get("query") || "";
+
+  console.log(initialQuery, "query");
+  const [query, setQuery] = useState(initialQuery);
   const [selectedFilters, setSelectedFilters] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const resultsPerPage = 5;
@@ -46,6 +52,17 @@ const ResultsPage = () => {
     );
   };
 
+  const handleSearch = () => {
+    if (query.trim()) {
+      setSearchParams({ query: encodeURIComponent(query) });
+    }
+  };
+
+  const clearQuery = () => {
+    setQuery("");
+    setSearchParams({});
+  };
+
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-[#F5F7FA] to-[#E0E7EE]">
       <div className="w-full max-w-6xl mx-auto mt-6 flex items-center px-4 space-x-6">
@@ -57,9 +74,20 @@ const ResultsPage = () => {
           <Input
             type="text"
             placeholder="Search coding questions..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
             className="flex-grow shadow-none border-none focus:outline-none focus:ring-0 focus-visible:ring-0 text-gray-700 px-4"
           />
-          <Button className="h-[44px] px-6 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-all flex items-center justify-center">
+          {query && (
+            <X
+              className="text-gray-400 cursor-pointer mx-2"
+              onClick={clearQuery}
+            />
+          )}
+          <Button
+            className="h-[44px] px-6 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-all flex items-center justify-center"
+            onClick={handleSearch}
+          >
             Search
           </Button>
         </div>
@@ -128,7 +156,6 @@ const ResultsPage = () => {
             </Button>
           </div>
         </div>
-
         <div className="col-span-1">
           <h3 className="text-lg font-bold text-gray-700 flex items-center space-x-2">
             <Filter size={20} className="text-blue-500" />
