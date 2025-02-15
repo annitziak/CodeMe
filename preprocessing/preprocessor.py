@@ -77,7 +77,23 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    preprocessor = Preprocessor(parser_kwargs={"parser_type": "html"})
+    tokenizer_kwargs = {
+        "use_bpe": False,
+        "camel_case_behaviour": "keep-split",
+        "snake_case_behaviour": "keep-split",
+    }
+    new_tokenizer_kwargs = DEFAULT_TOKENIZER_KWARGS.copy()
+    new_tokenizer_kwargs.update(tokenizer_kwargs)
+
+    preprocessor = Preprocessor(
+        parser_kwargs={"parser_type": "html"},
+        tokenizer_kwargs={
+            "text_tokenizer_kwargs": new_tokenizer_kwargs,
+            "code_tokenizer_kwargs": new_tokenizer_kwargs,
+            "link_tokenizer_kwargs": new_tokenizer_kwargs,
+            "post_text_normalizer_operations": {},
+        },
+    )
     db_connection = DBConnection(DB_PARAMS)
 
     inspect_block = Block
@@ -113,6 +129,10 @@ if __name__ == "__main__":
                     break
     else:
         test_htmls = [
+            """<html>
+            //DeadServer_time//With.PunctuationStuff
+            //DeadServer_time_DeadServer//DeadServer_DeadServer
+            </html>""",
             """<html>
              <p>An exmaple:</p>
              <pre><code>plot(1:10,rand(1,10))

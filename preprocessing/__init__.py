@@ -104,3 +104,5 @@ class Term:
     end_position: int = -1
     start_char_offset: int = -1  # highlighting search snippets
     end_char_offset: int = -1  # highlighting search snippets
+
+    sub_terms: list["Term"] = field(default_factory=list)
