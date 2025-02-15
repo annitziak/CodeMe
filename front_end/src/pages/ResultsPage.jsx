@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Search, Eye, MessageSquare, ThumbsUp, Filter } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 
 const searchResults = [
   {
@@ -47,27 +48,24 @@ const ResultsPage = () => {
 
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-[#F5F7FA] to-[#E0E7EE]">
-      {/* Header Section */}
-      <div className="w-full max-w-6xl mx-auto mt-6 flex items-center justify-between px-4">
-        <h1 className="text-3xl font-semibold text-blue-600">CodeMe</h1>
-
-        {/* Search Bar */}
-        <div className="relative flex items-center bg-white shadow-md rounded-full px-3 py-1 w-[75%]">
-          <Search className="text-gray-400" />
+      <div className="w-full max-w-6xl mx-auto mt-6 flex items-center px-4 space-x-6">
+        <h1 className="text-3xl font-semibold text-blue-600 whitespace-nowrap">
+          CodeMe
+        </h1>
+        <div className="relative flex items-center bg-white shadow-md rounded-full w-[75%]">
+          <Search className="text-gray-400 ml-4" />
           <Input
             type="text"
             placeholder="Search coding questions..."
-            className="flex-grow shadow-none border-none focus:outline-none focus:ring-0 text-gray-700 px-2"
+            className="flex-grow shadow-none border-none focus:outline-none focus:ring-0 focus-visible:ring-0 text-gray-700 px-4"
           />
-          <Button className="rounded-full bg-blue-500 text-white px-4 py-1 hover:bg-blue-600 transition-all">
+          <Button className="h-[44px] px-6 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-all flex items-center justify-center">
             Search
           </Button>
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="flex flex-grow w-full max-w-6xl mx-auto mt-10 grid grid-cols-3 gap-8 px-4 pb-7">
-        {/* Search Results */}
         <div className="col-span-2 space-y-6">
           {currentResults.map((result, index) => (
             <div key={index} className="border-b border-gray-300 pb-4">
@@ -102,7 +100,6 @@ const ResultsPage = () => {
             </div>
           ))}
 
-          {/* Pagination */}
           <div className="flex justify-between mt-auto pb-10">
             <Button
               className={`px-4 py-2 rounded-lg ${
@@ -132,7 +129,6 @@ const ResultsPage = () => {
           </div>
         </div>
 
-        {/* Filters Sidebar */}
         <div className="col-span-1">
           <h3 className="text-lg font-bold text-gray-700 flex items-center space-x-2">
             <Filter size={20} className="text-blue-500" />

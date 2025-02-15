@@ -6,7 +6,7 @@ function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/" element={<SearchPage />} />  {/* Default route */}
+        <Route path="/" element={<SearchPage />} />
         <Route path="/search" element={<ResultsPage />} />
       </Routes>
     </Router>
