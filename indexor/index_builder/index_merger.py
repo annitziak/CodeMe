@@ -745,20 +745,21 @@ class IndexMerger:
             shutil.move(
                 shard_files[i], os.path.join(self.index_path, f"{filename}.index")
             )
+            old_shard_num = int(shard_files[i].split("_")[-1].split(".")[0])
             shutil.move(
-                os.path.join(self.index_path, f"shard_{i}.position"),
+                os.path.join(self.index_path, f"shard_{old_shard_num}.position"),
                 os.path.join(self.index_path, f"{filename}.position"),
             )
             shutil.move(
-                os.path.join(self.index_path, f"shard_{i}.offset"),
+                os.path.join(self.index_path, f"shard_{old_shard_num}.offset"),
                 os.path.join(self.index_path, f"{filename}.offset"),
             )
             shutil.move(
-                os.path.join(self.index_path, f"doc_shard_{i}.index"),
+                os.path.join(self.index_path, f"doc_shard_{old_shard_num}.index"),
                 os.path.join(self.index_path, f"doc_{filename}.index"),
             )
             shutil.move(
-                os.path.join(self.index_path, f"doc_shard_{i}.offset"),
+                os.path.join(self.index_path, f"doc_shard_{old_shard_num}.offset"),
                 os.path.join(self.index_path, f"doc_{filename}.offset"),
             )
 

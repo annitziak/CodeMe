@@ -2,6 +2,7 @@ import torch
 import os
 import faiss
 import json
+import pickle
 
 from utils.db_connection import DBConnection
 from constants import DB_PARAMS
@@ -102,10 +103,25 @@ class EmbedManager:
 
         pbar.close()
 
+    def save_raw_embedding(self):
+        self.load()
+
+        in_mem_map = {}
+        for doc_id in tqdm(self.index_map):
+            embedding = self.index.reconstruct(self.index_map[doc_id])
+            in_mem_map[doc_id] = embedding
+
+        with open(os.path.join(self.save_dir, "raw_embedding.pkl"), "wb") as f:
+            pickle.dump(in_mem_map, f)
+
     def load(self):
         index = faiss.read_index(os.path.join(self.save_dir, "index.faiss"))
         with open(os.path.join(self.save_dir, "index_map.json"), "r") as f:
             index_map = json.load(f)
+
+        self.index = index
+        self.index_map = index_map
+
         return index, index_map
 
     def search(self, query, k=10):
@@ -144,6 +160,7 @@ if __name__ == "__main__":
         args.device,
         save_dir=args.save_dir,
     )
+    embed_manager.save_raw_embedding()
     embed_manager.embed_and_save(args.limit)
     res = embed_manager.search("How to write a Python function?", k=10)
     print(res)

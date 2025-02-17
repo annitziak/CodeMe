@@ -297,9 +297,13 @@ class IndexBuilder:
                 for block in blocks:
                     for word in block.words:
                         if word.term not in doc_terms.keys():
-                            doc_terms[word.term] = [word.position + position_offset]
+                            doc_terms[word.term] = [
+                                word.start_position + position_offset
+                            ]
                         else:
-                            doc_terms[word.term].append(word.position + position_offset)
+                            doc_terms[word.term].append(
+                                word.start_position + position_offset
+                            )
 
                     position_offset += block.block_length
 
