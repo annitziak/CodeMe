@@ -122,6 +122,7 @@ if __name__ == "__main__":
                 for post in posts:
                     post_id, body = post
                     text_blocks = preprocessor.preprocess(body)
+                    print(f"Post ID: {post_id}")
                     pprint.pp([x for x in text_blocks if isinstance(x, inspect_block)])
 
                 should_continue = input("Continue? [(y)/n]: ")

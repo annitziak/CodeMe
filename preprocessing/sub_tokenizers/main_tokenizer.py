@@ -5,42 +5,9 @@ from copy import copy
 from preprocessing import Term
 from preprocessing.sub_tokenizers.bpe_code_tokenizer import (
     CustomPreTokenizer,
-    BPETokenizer,
 )
 
-DEFAULT_PUNCTUATION = [
-    "[",
-    "]",
-    "{",
-    "}",
-    "<",
-    ">",
-    "(",
-    ")",
-    ".",
-    ",",
-    ";",
-    ":",
-    "=",
-    "+",
-    "-",
-    "*",
-    "/",
-    "!",
-    "@",
-    "#",
-    "$",
-    "%",
-    "^",
-    "&",
-    "~",
-    "`",
-    "#",
-    "?",
-    '"',
-    "'",
-    "\\",
-]
+DEFAULT_PUNCTUATION = r'([\[\]{}()<>(),;:=+\-*\/!@#$%^&~`#?\'"\\|]|\.(?=\s))'
 
 
 def _handle_general_split(
@@ -52,7 +19,7 @@ def _handle_general_split(
         parts = re.split(regex, pos.term)
         current_pos = pos.start_position
         pos_diff = pos.end_position - pos.start_position
-        if idx > 0:
+        if idx > 0 and idx <= len(new_positions):
             current_pos = max(new_positions[idx - 1].end_position + 1, current_pos)
 
         current_offset = pos.start_char_offset
@@ -85,15 +52,14 @@ def _handle_general_keep_split(
     for idx, pos in enumerate(positions):
         current_pos = pos.start_position
         pos_diff = pos.end_position - pos.start_position
-        if idx > 0 and idx < len(new_positions):
-            current_pos = max(positions[idx - 1].end_position + 1, current_pos)
+        if idx > 0 and idx <= len(new_positions):
+            current_pos = max(new_positions[idx - 1].end_position + 1, current_pos)
 
         parts = re.split(regex, pos.term)
         current_offset = pos.start_char_offset
 
         start_pos = copy(current_pos)
         sub_parts = []
-
 
         if len(pos.sub_terms) == 0:
             # Where parts should be used to generate new sub-terms
@@ -144,15 +110,15 @@ class PunctuationHandler:
         self.punctuation_behaviour = punctuation_behaviour
 
         self.punctuation = punctuation
-        if isinstance(self.punctuation, str):
-            self.punctuation = self.punctuation.split()
+        if isinstance(self.punctuation, list):
+            self.punctuation = [f"({p})" for p in self.punctuation]
+            pattern = "|".join(self.punctuation)
 
-        self.punctuation = [re.escape(p) for p in self.punctuation]
-        pattern = "".join(self.punctuation)
-
-        self.re = re.compile(f"[{pattern}]")
-        if self.punctuation_behaviour in ["remove_split", "keep-split"]:
-            self.re = re.compile(f"([{pattern}])")
+            self.re = re.compile(f"[{pattern}]")
+            if self.punctuation_behaviour in ["remove_split", "keep-split"]:
+                self.re = re.compile(f"([{pattern}])")
+        elif isinstance(self.punctuation, str):
+            self.re = re.compile(punctuation)
 
     def __call__(self, positions: list[Term]):
         if self.punctuation_behaviour == "remove-split":
@@ -215,7 +181,7 @@ class MainTokenizer:
             PunctuationHandler(
                 punctuation=DEFAULT_PUNCTUATION,
                 punctuation_behaviour="remove-split",
-            )
+            ),
         ],
     ):
         """
@@ -278,7 +244,6 @@ class MainTokenizer:
     def __getstate__(self) -> object:
         data = self.__dict__.copy()
         del data["pre_tokenizer"]
-        del data["tokenizer"]
 
         return data
 
@@ -287,7 +252,6 @@ class MainTokenizer:
 
         custom_pretokenizer = PreTokenizer.custom(CustomPreTokenizer())
         self.pre_tokenizer = Sequence([custom_pretokenizer, Whitespace()])
-        self.tokenizer = BPETokenizer(50256, save_path=".cache/tokenizer.json").load()
 
     def __call__(self, *args, **kwargs):
         return self.tokenize(*args, **kwargs)
@@ -299,13 +263,15 @@ class MainTokenizer:
             (self.contractions_behaviour, self._handle_contractions, 0),
             (self.mixed_token_behaviour, self._handle_mixed_tokens, 0),
             (self.digit_behaviour, self._handle_digits, 0),
-            (self.snake_case_behaviour, self._split_snake_case, 0),
-            (self.camel_case_behaviour, self._handle_camel_case, 0),
         ]
         punctuation_handlers = [
             (x.punctuation_behaviour, x, 0) for x in self.punctuation_handlers
         ]
-        queue = queue + punctuation_handlers
+        case_handlers = [
+            (self.snake_case_behaviour, self._split_snake_case, 0),
+            (self.camel_case_behaviour, self._handle_camel_case, 0),
+        ]
+        queue = queue + punctuation_handlers + case_handlers
 
         while queue:
             behaviour, handler, count = queue.pop(0)
@@ -315,7 +281,23 @@ class MainTokenizer:
 
             words = handler(words)
 
+        words = self._flatten(words)
+
         return words
+
+    def _flatten(self, words):
+        new_words = []
+        for word in words:
+            new_words.append(word)
+            sub_terms = word.sub_terms
+            for x in sub_terms:
+                x.start_position = -1
+                x.end_position = -1
+
+            word.sub_terms = []
+            new_words.extend(self._flatten(sub_terms))
+
+        return new_words
 
     def _initial_split(self, text: str):
         last_end = 0

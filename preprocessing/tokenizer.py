@@ -39,9 +39,13 @@ DEFAULT_TOKENIZER_KWARGS = {
     "digit_behaviour": "remove",
     "punctuation_handlers": [
         PunctuationHandler(
+            punctuation=r"(\S+)\.(\S+)",
+            punctuation_behaviour="keep-split",
+        ),
+        PunctuationHandler(
             punctuation=DEFAULT_PUNCTUATION,
             punctuation_behaviour="remove-split",
-        )
+        ),
     ],
 }
 
