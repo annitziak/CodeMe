@@ -13,6 +13,15 @@ SIZE_KEY = {
     "doc_id": "<Q",
     "doc_length": "<I",
     "doc_count": "<I",
+    "doc_score": "<i",
+    "doc_viewcount": "<I",
+    "doc_owneruserid": "<Q",
+    "doc_ownerdisplayname": "<I",
+    "doc_tags": "<I",
+    "doc_answercount": "<I",
+    "doc_commentcount": "<I",
+    "doc_favoritecount": "<I",
+    "doc_creationdate": "<I",
 }
 
 READ_SIZE_KEY = {
@@ -21,4 +30,5 @@ READ_SIZE_KEY = {
     "<H": 2,
     "<IH": 6,
     "<HQ": 10,
+    "<i": 4,
 }

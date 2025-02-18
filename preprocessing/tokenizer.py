@@ -8,6 +8,7 @@ from preprocessing.sub_tokenizers.main_tokenizer import (
     MainTokenizer,
     PunctuationHandler,
     DEFAULT_PUNCTUATION,
+    PUNCTUATION_DOT,
 )
 
 from preprocessing.normalizer import (
@@ -39,10 +40,6 @@ DEFAULT_TOKENIZER_KWARGS = {
     "digit_behaviour": "remove",
     "punctuation_handlers": [
         PunctuationHandler(
-            punctuation=r"(\S+)\.(\S+)",
-            punctuation_behaviour="keep-split",
-        ),
-        PunctuationHandler(
             punctuation=DEFAULT_PUNCTUATION,
             punctuation_behaviour="remove-split",
         ),
@@ -62,6 +59,37 @@ DEFAULT_NORMALIZER_OPERATIONS = [
 DEFAULT_PRE_TEXT_NORMALIZER_OPERATIONS = [
     UnicodeToAsciiNormalizer(),
 ]
+
+
+def BuildTokenizer(tokenizer_type: str):
+    if tokenizer_type == "keep-split-variables":
+        tokenizer_kwargs = DEFAULT_TOKENIZER_KWARGS
+        tokenizer_kwargs["punctuation_handlers"] = [
+            PunctuationHandler(
+                punctuation=r"(\S+)\.(\S+)",
+                punctuation_behaviour="keep-split",
+            ),
+            PunctuationHandler(
+                punctuation=PUNCTUATION_DOT,
+                punctuation_behaviour="remove-split",
+            ),
+        ]
+        tokenizer_kwargs["camel_case_behaviour"] = "keep-split"
+        tokenizer_kwargs["snake_case_behaviour"] = "keep-split"
+    elif tokenizer_type == "split-variables":
+        tokenizer_kwargs = DEFAULT_TOKENIZER_KWARGS
+        tokenizer_kwargs["punctuation_handlers"] = [
+            PunctuationHandler(
+                punctuation=DEFAULT_PUNCTUATION,
+                punctuation_behaviour="remove-split",
+            ),
+        ]
+        tokenizer_kwargs["camel_case_behaviour"] = "split"
+        tokenizer_kwargs["snake_case_behaviour"] = "split"
+    else:
+        raise ValueError(f"Unknown tokenizer type: {tokenizer_type}")
+
+    return tokenizer_kwargs
 
 
 class Tokenizer:

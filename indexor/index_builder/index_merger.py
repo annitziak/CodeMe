@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from indexor.index_builder.constants import SIZE_KEY, READ_SIZE_KEY
 from indexor.index_builder.shard_reader import ShardReader
+from indexor.index_builder.doc_reader import read_doc
 
 logger = logging.getLogger(__name__)
 
@@ -672,37 +673,7 @@ class IndexMerger:
                         open(shard_file, "rb") as shard_f,
                         open(offset_filename, "rb") as roffset_f,
                     ):
-                        try:
-                            local_doc_count = struct.unpack(
-                                SIZE_KEY["doc_count"],
-                                roffset_f.read(READ_SIZE_KEY[SIZE_KEY["doc_count"]]),
-                            )[0]
-
-                            for _ in range(local_doc_count):
-                                doc_id = struct.unpack(
-                                    SIZE_KEY["doc_id"],
-                                    roffset_f.read(READ_SIZE_KEY[SIZE_KEY["doc_id"]]),
-                                )[0]
-                                offset = struct.unpack(
-                                    SIZE_KEY["offset"],
-                                    roffset_f.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
-                                )[0]
-
-                                shard_f.seek(offset)
-                                doc_length = struct.unpack(
-                                    SIZE_KEY["doc_length"],
-                                    shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_length"]]),
-                                )[0]
-
-                                docs_offset[int(doc_id)] = docs_f.tell()
-                                docs_f.write(
-                                    struct.pack(SIZE_KEY["doc_length"], doc_length)
-                                )
-                        except struct.error as e:
-                            logger.error(
-                                f"Error reading {offset_filename} after length {len(docs_offset)} {e}"
-                            )
-                            break
+                        docs_offset = read_doc(docs_f, offset_f, shard_f, roffset_f)
 
                 for doc_id, offset in docs_offset.items():
                     offset_f.write(struct.pack(SIZE_KEY["doc_id"], doc_id))

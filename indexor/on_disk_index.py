@@ -15,6 +15,16 @@ from concurrent.futures import ProcessPoolExecutor
 
 from indexor.structures import Term, PostingList, IndexBase
 from indexor.index_builder.constants import SIZE_KEY, READ_SIZE_KEY
+from indexor.query import (
+    BooleanQuery,
+    Query,
+    TermQuery,
+    AND,
+    OR,
+    NOT,
+    PhraseQuery,
+    ProximityQuery,
+)
 
 logging.basicConfig(
     format=f"%(asctime)s - %(name)s - {os.getpid()} - %(levelname)s - %(message)s"
@@ -89,6 +99,35 @@ def process_posting_block(
         position_counts[i] = position_count
 
     return doc_ids, term_frequencies, position_counts
+
+
+def _read_fst(fst, term: str | bytes, is_sharded=True):
+    if isinstance(term, str):
+        term_bytes = term.encode("utf-8")
+    else:
+        term_bytes = term
+
+    encoded = fst.get(term_bytes)
+
+    if is_sharded:
+        if encoded is None:
+            raise ValueError(f"Term {term} not found in index")
+
+        for encoding in encoded:
+            shard, offset, pos_offset = struct.unpack(
+                SIZE_KEY["pos_offset_shard"], encoding
+            )
+            yield shard, offset, pos_offset
+        return
+
+    if encoded is None:
+        yield -1, -1, -1
+        return
+
+    unpacked = [struct.unpack(SIZE_KEY["pos_offset"], x) for x in encoded]
+    assert len(encoded) == 1, f"Term {term} not found in index {unpacked}"
+    logger.info(f"Unpacked: {unpacked}")
+    yield -1, unpacked[0][0], unpacked[0][1]
 
 
 class MMappedFile:
@@ -243,7 +282,7 @@ class TermCache:
 
 
 class ShardWorker:
-    def __init__(self, index_path: str = "", is_sharded: bool = False):
+    def __init__(self, index_path: str = "", is_sharded: bool = False, doc_set={}):
         self.index_path = index_path
 
         glob_pattern_common = "shard_*.index" if is_sharded else "postings.bin"
@@ -268,6 +307,26 @@ class ShardWorker:
             index_path, glob_pattern_docs_offset, is_sharded=is_sharded
         )
 
+        self.term_fst = marisa_trie.BytesTrie()
+        self.doc_fst = marisa_trie.BytesTrie()
+
+        self.term_fst.load(os.path.join(index_path, "terms.fst"))
+
+        self.doc_set = doc_set
+
+        self.all_doc_metadata_keys = [
+            "doc_length",
+            "score",
+            "viewcount",
+            "owneruserid",
+            "answercount",
+            "commentcount",
+            "favoritecount",
+            "ownerdisplayname",
+            "tags",
+            "creationdate",
+        ]
+
         self.doc_bounds = _load_doc_id_bounds(self.index_path)
 
     def __del__(self):
@@ -284,12 +343,22 @@ class ShardWorker:
         self,
         term: str,
         shard: int,
-        offset: int,
+        offset: int = -1,
         pos_offset=-1,
         limit=100_000,
         positions=False,
     ):
         start = time.time()
+
+        if offset == -1 or pos_offset == -1:
+            for _shard, _offset, _pos_offset in _read_fst(
+                self.term_fst, term, is_sharded=True
+            ):
+                if _shard != shard:
+                    continue
+
+                offset = _offset
+                pos_offset = _pos_offset
 
         posting_mmap = self.postings_mmaps.load(shard)[shard]
         posting_mmap.seek(offset)
@@ -301,7 +370,6 @@ class ShardWorker:
             SIZE_KEY["postings_count"],
             posting_mmap.read(READ_SIZE_KEY[SIZE_KEY["postings_count"]]),
         )[0]
-        current_doc_id = 0
 
         deltaTF_fmt = SIZE_KEY["deltaTF"]
         position_count_fmt = SIZE_KEY["position_count"]
@@ -344,74 +412,232 @@ class ShardWorker:
 
         return shard, doc_ids, term_frequencies, all_positions
 
-    def _get_intersection(
-        self, terms: list[str | Term], shard: int, offsets: list[int]
+    def _search(self, query: Query, shard: int = 0, limit=100_000):
+        def _search_helper(query):
+            if isinstance(query, TermQuery):
+                return self._get_term(query.query, shard, -1, limit=limit)
+            elif isinstance(query, AND):
+                left = _search_helper(query.left)
+                right = _search_helper(query.right)
+
+                return self._get_intersection([left, right], shard, [-1, -1])
+            elif isinstance(query, OR):
+                left = _search_helper(query.left)
+                right = _search_helper(query.right)
+
+                return self._get_union([left, right], shard, [-1, -1])
+            elif isinstance(query, NOT):
+                left = _search_helper(query.right)
+                return self._get_complement(left)
+            elif isinstance(query, PhraseQuery):
+                return self._prox_search(
+                    query, shard, -1, limit=limit, exact=True, absolute=False
+                )
+            elif isinstance(query, ProximityQuery):
+                return self._prox_search(
+                    query, shard, -1, limit=limit, exact=False, absolute=True
+                )
+            else:
+                raise ValueError(f"Query type {type(query)} not supported")
+
+        if isinstance(query, BooleanQuery) or isinstance(query, Query):
+            return _search_helper(query.parse().pop())
+
+    def _prox_search(
+        self,
+        query: Query,
+        shard: int,
+        offset: int,
+        limit=100_000,
+        exact=True,
+        absolute=False,
     ):
-        curr_doc_ids_dict = None
+        terms = query.parsed_query
+        distances = query.distances
+
+        if len(terms) == 1:
+            return self._get_term(terms[0], shard, offset, limit=limit, positions=True)
+
+        _, doc_ids, term_frequencies, all_positions = self._get_intersection(
+            terms, shard, [-1] * len(terms), positions=True
+        )
+
+        valid_doc_mask = np.zeros(len(doc_ids), dtype=np.bool)
+
+        for doc_idx in range(len(doc_ids)):
+            term_positions = all_positions[doc_idx]
+            num_terms = len(terms)
+
+            for term_i in range(num_terms - 1):
+                min_dist = float("inf")
+                term_i_positions = term_positions[term_i]
+                term_j_positions = term_positions[term_i + 1]
+
+                for pos_i in term_i_positions:
+                    for pos_j in term_j_positions:
+                        dist = pos_j - pos_i
+
+                        if exact and not absolute and dist == distances[term_i]:
+                            valid_doc_mask[doc_idx] = True
+                            break
+                        elif not exact and absolute and abs(dist) <= distances[term_i]:
+                            valid_doc_mask[doc_idx] = True
+                            break
+                        elif not exact and not absolute:
+                            raise ValueError(
+                                f"Invalid proximity search type: {exact} {absolute}"
+                            )
+
+        doc_ids = doc_ids[valid_doc_mask]
+        term_frequencies = term_frequencies[valid_doc_mask]
+        positions = [
+            y for i, x in enumerate(all_positions) if valid_doc_mask[i] for y in x[0]
+        ]
+
+        return 0, doc_ids, term_frequencies, positions
+
+    def _get_complement(self, term: str | tuple[int, np.ndarray, np.ndarray]):
+        if isinstance(term, str):
+            _, doc_ids, term_frequencies, _ = self._get_term(term, 0, -1, False)
+        else:
+            doc_ids, term_frequencies = term[1], term[2]
+
+        doc_set_arr = np.array(list(self.doc_set))
+        complement_mask = ~np.isin(doc_set_arr, doc_ids)
+
+        complement_doc_ids = np.array(doc_set_arr)[complement_mask]
+        complement_term_frequencies = np.zeros(len(complement_doc_ids), dtype=np.int32)
+
+        return 0, complement_doc_ids, complement_term_frequencies, []
+
+    def _get_intersection(
+        self,
+        terms: list[str | tuple[int, np.ndarray, np.ndarray, list]],
+        shard: int,
+        offsets: list[int],
+        positions=False,
+    ):
+        intersection_mask = None
+        intersection_doc_ids = None
+        intersection_term_frequencies = None
+        intersection_all_positions = []
+        for term_idx, (term, offset) in enumerate(zip(terms, offsets)):
+            for i in range(len(intersection_all_positions)):
+                if len(intersection_all_positions[i]) <= term_idx:
+                    intersection_all_positions[i].append([])
+
+            if term == "":
+                continue
+
+            if isinstance(term, str):
+                _, doc_ids, term_frequencies, all_positions = self._get_term(
+                    term, shard, offset, positions=positions
+                )
+            else:
+                doc_ids, term_frequencies, all_positions = term[1], term[2], term[3]
+
+            if intersection_mask is None or intersection_doc_ids is None:
+                intersection_mask = doc_ids
+                intersection_doc_ids = doc_ids
+                intersection_term_frequencies = term_frequencies
+                # [Doc1[position1, position2, ...], Doc2[...], ...]
+                intersection_all_positions = []
+                if positions:
+                    intersection_all_positions = [[x] for x in all_positions]
+                continue
+
+            intersection_mask = np.isin(intersection_doc_ids, doc_ids)
+            intersection_doc_ids = intersection_doc_ids[intersection_mask]
+            intersection_term_frequencies = intersection_term_frequencies[
+                intersection_mask
+            ]
+
+            if positions:
+                for idx, doc_positions in enumerate(all_positions):
+                    doc_id = doc_ids[idx]
+                    if doc_id not in intersection_doc_ids:
+                        continue
+
+                    intersection_idx = np.where(intersection_doc_ids == doc_id)[0][0]
+                    if len(intersection_all_positions[intersection_idx]) <= term_idx:
+                        intersection_all_positions[intersection_idx].append([])
+
+                    intersection_all_positions[intersection_idx][term_idx].extend(
+                        doc_positions
+                    )
+                intersection_all_positions = [
+                    x
+                    for idx, x in enumerate(intersection_all_positions)
+                    if intersection_mask[idx]
+                ]
+
+        return (
+            0,
+            intersection_doc_ids,
+            intersection_term_frequencies,
+            intersection_all_positions,
+        )
+
+    def _get_union(
+        self,
+        terms: list[str | tuple[int, np.ndarray, np.ndarray]],
+        shard: int,
+        offsets: list[int],
+    ):
+        union_mask = None
+        union_doc_ids = None
+        union_term_frequencies = None
         for term, offset in zip(terms, offsets):
             if isinstance(term, str):
-                shard, doc_ids, term_frequencies, all_positions = self._get_term(
+                _, doc_ids, term_frequencies, _ = self._get_term(
                     term, shard, offset, False
                 )
-                doc_ids_dict = {
-                    doc_id: term_frequency
-                    for doc_id, term_frequency in zip(doc_ids, term_frequencies)
-                }
             else:
-                posting_lists = term.posting_lists
-                doc_ids_dict = {
-                    posting.doc_id: posting.doc_term_frequency
-                    for posting in posting_lists
-                }
+                doc_ids, term_frequencies = term[1], term[2]
 
-            if curr_doc_ids_dict is None:
-                curr_doc_ids_dict = doc_ids_dict
-            else:
-                curr_doc_ids_dict = {
-                    doc_id: term_frequency + curr_doc_ids_dict[doc_id]
-                    for doc_id, term_frequency in doc_ids_dict.items()
-                    if doc_id in curr_doc_ids_dict
-                }
+            if union_mask is None:
+                union_mask = doc_ids
+                union_doc_ids = doc_ids
+                union_term_frequencies = term_frequencies
+                continue
 
-        return curr_doc_ids_dict
+            union_mask = np.union1d(union_mask, doc_ids)
+            union_doc_ids = np.union1d(union_doc_ids, doc_ids)
+            union_term_frequencies = np.union1d(
+                union_term_frequencies, term_frequencies
+            )
 
-    def _get_union(self, terms: list[str | Term], shard: int, offsets: list[int]):
-        all_docs = None
-        for term, offset in zip(terms, offsets):
-            if isinstance(term, str):
-                shard, doc_ids, term_frequencies, all_positions = self._get_term(
-                    term, shard, offset, False
-                )
-                doc_ids_dict = {
-                    doc_id: term_frequency
-                    for doc_id, term_frequency in zip(doc_ids, term_frequencies)
-                }
-            else:
-                posting_lists = term.posting_lists
-                doc_ids_dict = {
-                    posting.doc_id: posting.doc_term_frequency
-                    for posting in posting_lists
-                }
+        return 0, union_doc_ids, union_term_frequencies, []
 
-            if all_docs is None:
-                all_docs = doc_ids_dict
-            else:
-                for doc_id, term_frequency in doc_ids_dict.items():
-                    if doc_id not in all_docs:
-                        all_docs[doc_id] = term_frequency
-                    else:
-                        all_docs[doc_id] += term_frequency
-
-        return all_docs
-
-    def _get_document_length(self, doc_id: int, shard: int, offset: int):
+    def _get_document_metadata(
+        self, doc_id: int, shard: int, offset: int, keys=["all"]
+    ):
         mmap = self.doc_mmaps.load(shard)[shard]
         mmap.seek(offset)
 
-        return struct.unpack(
-            SIZE_KEY["doc_length"],
-            mmap.read(READ_SIZE_KEY[SIZE_KEY["doc_length"]]),
-        )[0]
+        if "all" in keys:
+            keys = self.all_doc_metadata_keys
+
+        if len(keys) == 0:
+            return {}
+
+        ret = {}
+        for key in keys:
+            if key in ["ownerdisplayname", "tags", "creationdate"]:
+                size = struct.unpack(
+                    SIZE_KEY[f"doc_{key}"],
+                    mmap.read(READ_SIZE_KEY[SIZE_KEY[f"doc_{key}"]]),
+                )[0]
+                ret[key] = mmap.read(size).decode("utf-8")
+                continue
+
+            key_name = f"doc_{key}" if "doc" not in key else key
+            ret[key] = struct.unpack(
+                SIZE_KEY[key_name],
+                mmap.read(READ_SIZE_KEY[SIZE_KEY[key_name]]),
+            )[0]
+
+        return ret
 
     def _get_document_count(self):
         doc_count = 0
@@ -444,6 +670,11 @@ def worker_get_term(*args, **kwargs):
     return _worker._get_term(*args, **kwargs)
 
 
+def worker_search(*args, **kwargs):
+    global _worker
+    return _worker._search(*args, **kwargs)
+
+
 def worker_get_intersection(*args, **kwargs):
     global _worker
     return _worker._get_intersection(*args, **kwargs)
@@ -459,9 +690,9 @@ def worker_load(*args, **kwargs):
     return _worker._load_files(*args, **kwargs)
 
 
-def worker_get_document_length(*args, **kwargs):
+def worker_get_document_metadata(*args, **kwargs):
     global _worker
-    return _worker._get_document_length(*args, **kwargs)
+    return _worker._get_document_metadata(*args, **kwargs)
 
 
 def worker_get_document_count(*args, **kwargs):
@@ -503,8 +734,8 @@ class OnDiskIndex(IndexBase):
 
         self.term_fst = self._load_fst(os.path.join(self.load_path, "terms.fst"))
         self.doc_fst = self._load_fst(os.path.join(self.load_path, "docs.fst"))
-        # self.doc_set = set(self.doc_fst.keys())  # enough mem??
-        self.doc_set = set()
+        self.doc_set = set(self.doc_fst.keys())  # enough mem??
+        # self.doc_set = set()
 
         self.num_workers = min(
             index_builder_kwargs.get("num_workers", 24), os.cpu_count() - 1
@@ -515,6 +746,7 @@ class OnDiskIndex(IndexBase):
             initargs=(
                 self.load_path,
                 self.is_sharded,
+                self.doc_set,
             ),
         )
         for shard in range(self.num_workers):
@@ -523,41 +755,14 @@ class OnDiskIndex(IndexBase):
         logger.info(f"Initialized worker pool with {self.num_workers} workers")
 
         self.doc_bounds = _load_doc_id_bounds(self.load_path)
-
         self.term_cache = TermCache()
+
+        self.num_shards = len(self.doc_bounds)
 
     def _load_fst(self, filename):
         fst = marisa_trie.BytesTrie()
         fst.load(filename)
         return fst
-
-    def _read_fst(self, fst, term: str | bytes):
-        if isinstance(term, str):
-            term_bytes = term.encode("utf-8")
-        else:
-            term_bytes = term
-
-        encoded = fst.get(term_bytes)
-
-        if self.is_sharded:
-            if encoded is None:
-                raise ValueError(f"Term {term} not found in index")
-
-            for encoding in encoded:
-                shard, offset, pos_offset = struct.unpack(
-                    SIZE_KEY["pos_offset_shard"], encoding
-                )
-                yield shard, offset, pos_offset
-            return
-
-        if encoded is None:
-            yield -1, -1, -1
-            return
-
-        unpacked = [struct.unpack(SIZE_KEY["pos_offset"], x) for x in encoded]
-        assert len(encoded) == 1, f"Term {term} not found in index {unpacked}"
-        logger.info(f"Unpacked: {unpacked}")
-        yield -1, unpacked[0][0], unpacked[0][1]
 
     def _build_term(self, term: Term, future, positions=False):
         shard, doc_ids, term_frequencies, position_list = future.result()
@@ -586,7 +791,9 @@ class OnDiskIndex(IndexBase):
         start = time.time()
         results = []
         _start = time.time()
-        for shard, offset, pos_offset in self._read_fst(self.term_fst, term):
+        for shard, offset, pos_offset in _read_fst(
+            self.term_fst, term, is_sharded=self.is_sharded
+        ):
             if shard == -1 and offset == -1 and pos_offset == -1:
                 continue
 
@@ -610,6 +817,17 @@ class OnDiskIndex(IndexBase):
             f"GET TERM: time taken: {time.time() - start} with positions={positions}"
         )
         print(f"GET TERM: time taken: {time.time() - start} with positions={positions}")
+
+        return ret_term
+
+    def search(self, query: Query, limit: int = -1):
+        futures = []
+        for shard in range(self.num_shards):
+            futures.append(self.worker_pool.submit(worker_search, query, shard, limit))
+
+        ret_term = Term(query.__str__())
+        for future in futures:
+            ret_term = self._build_term(ret_term, future)
 
         return ret_term
 
@@ -642,6 +860,22 @@ class OnDiskIndex(IndexBase):
     def get_document_frequency(self, term: str) -> int:
         return self.get_term(term).document_frequency
 
+    def get_document_metadata(self, doc_id: int, keys=["all"]) -> dict:
+        value = self.doc_fst.get(str(doc_id))
+        if value is None:
+            try_again = self.doc_fst.get(str(doc_id)[:-2])
+            final = self.doc_fst.get(str(doc_id)[:-1])
+            raise ValueError(
+                f"Document {doc_id} not found in index of length {len(self.doc_fst)} {try_again} {final} {list(self.doc_fst.keys())[:10]}"
+            )
+
+        shard, offset = struct.unpack(SIZE_KEY["offset_shard"], value[0])
+        future = self.worker_pool.submit(
+            worker_get_document_metadata, doc_id, shard=shard, offset=offset, keys=keys
+        )
+
+        return future.result()
+
     def get_document_length(self, doc_id: int) -> int:
         value = self.doc_fst.get(str(doc_id))
         if value is None:
@@ -653,10 +887,10 @@ class OnDiskIndex(IndexBase):
 
         shard, offset = struct.unpack(SIZE_KEY["offset_shard"], value[0])
         future = self.worker_pool.submit(
-            worker_get_document_length, doc_id, shard=shard, offset=offset
+            worker_get_document_metadata, doc_id, shard=shard, offset=offset
         )
 
-        return future.result()
+        return future.result()["doc_length"]
 
     def get_all_posting_lists(self, term: str, positions=False) -> list[PostingList]:
         return [
@@ -670,7 +904,9 @@ class OnDiskIndex(IndexBase):
     ) -> PostingList | None:
         target_shard = self._get_shard_for_doc_id(doc_id)
         logger.info(f"Target shard: {target_shard}")
-        for shard, offset, pos_offset in self._read_fst(self.term_fst, term):
+        for shard, offset, pos_offset in _read_fst(
+            self.term_fst, term, is_sharded=self.is_sharded
+        ):
             if shard != target_shard:
                 continue
 
@@ -702,7 +938,9 @@ class OnDiskIndex(IndexBase):
 
         all_term_offsets = {}
         for term in terms:
-            for shard, offset, _ in self._read_fst(self.term_fst, term):
+            for shard, offset, _ in _read_fst(
+                self.term_fst, term, is_sharded=self.is_sharded
+            ):
                 if shard not in all_term_offsets:
                     all_term_offsets[shard] = []
 
@@ -730,14 +968,14 @@ class OnDiskIndex(IndexBase):
         """
         Get the union of the posting lists of the given terms
         """
-        fst = self.term_fst
-
         results = []
         _start = time.time()
 
         all_term_offsets = {}
         for term in terms:
-            for shard, offset, _ in self._read_fst(self.term_fst, term):
+            for shard, offset, _ in _read_fst(
+                self.term_fst, term, is_sharded=self.is_sharded
+            ):
                 if shard not in all_term_offsets:
                     all_term_offsets[shard] = []
 
@@ -827,12 +1065,26 @@ class OnDiskIndex(IndexBase):
         doc_meta_path = os.path.join(path, "doc_metadata.txt")
         sorted_doc_ids = sorted([int(x) for x in self.doc_fst.keys()])
         with open(doc_meta_path, "w") as f:
+            tags = [
+                "creationdate",
+                "score",
+                "viewcount",
+                "owneruserid",
+                "answercount",
+                "commentcount",
+                "favoritecount",
+                "ownerdisplayname",
+                "tags",
+            ]
+            f.write(f'doc_id,{",".join(tags)}')
             for doc_id in sorted_doc_ids:
                 if isinstance(doc_id, bytes):
                     doc_id = doc_id.decode("utf-8")
 
-                doc_length = self.get_document_length(int(doc_id))
-                f.write(f"{doc_id}: {doc_length}\n")
+                doc_metadata = self.get_document_metadata(int(doc_id))
+                out = ",".join([str(doc_metadata[tag]) for tag in tags])
+
+                f.write(f"{doc_id},{out}\n")
 
         logger.info(f"Document metadata written to {doc_meta_path}")
 

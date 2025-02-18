@@ -7,7 +7,8 @@ from preprocessing.sub_tokenizers.bpe_code_tokenizer import (
     CustomPreTokenizer,
 )
 
-DEFAULT_PUNCTUATION = r'([\[\]{}()<>(),;:=+\-*\/!@#$%^&~`#?\'"\\|]|\.(?=\s))'
+DEFAULT_PUNCTUATION = r'([\[\]{}()<>().,;:=+\-*\/!@#$%^&~`#?\'"\\|])'
+PUNCTUATION_DOT = r'([\[\]{}()<>(),;:=+\-*\/!@#$%^&~`#?\'"\\|]|\.(?=\s))'
 
 
 def _handle_general_split(
@@ -119,6 +120,9 @@ class PunctuationHandler:
                 self.re = re.compile(f"([{pattern}])")
         elif isinstance(self.punctuation, str):
             self.re = re.compile(punctuation)
+
+    def __str__(self):
+        return f"{self.punctuation_behaviour}: {self.punctuation}"
 
     def __call__(self, positions: list[Term]):
         if self.punctuation_behaviour == "remove-split":

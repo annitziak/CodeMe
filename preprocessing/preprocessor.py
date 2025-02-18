@@ -7,6 +7,7 @@ from preprocessing.tokenizer import (
     DEFAULT_TOKENIZER_KWARGS,
     DEFAULT_NORMALIZER_OPERATIONS,
     DEFAULT_PRE_TEXT_NORMALIZER_OPERATIONS,
+    BuildTokenizer,
 )
 
 # from preprocessing.original_tokenizer import Tokenizer
@@ -33,7 +34,7 @@ def BuildParser(parser_type: str, **kwargs):
 class Preprocessor:
     def __init__(
         self,
-        parser_kwargs={},
+        parser_kwargs={"parser_type": "raw"},
         tokenizer_kwargs={
             "pre_text_normalizer_operations": DEFAULT_PRE_TEXT_NORMALIZER_OPERATIONS,
             "pre_code_normalizer_operations": DEFAULT_PRE_TEXT_NORMALIZER_OPERATIONS,
@@ -75,15 +76,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--inspect-block", choices=["normal", "link", "code"], default=None
     )
+    parser.add_argument(
+        "--tokenizer-type",
+        type=str,
+        choices=["keep-split-variables", "split-variables"],
+        default="split-variables",
+    )
     args = parser.parse_args()
 
-    tokenizer_kwargs = {
-        "use_bpe": False,
-        "camel_case_behaviour": "keep-split",
-        "snake_case_behaviour": "keep-split",
-    }
-    new_tokenizer_kwargs = DEFAULT_TOKENIZER_KWARGS.copy()
-    new_tokenizer_kwargs.update(tokenizer_kwargs)
+    new_tokenizer_kwargs = BuildTokenizer(args.tokenizer_type)
 
     preprocessor = Preprocessor(
         parser_kwargs={"parser_type": "html"},
@@ -91,7 +92,7 @@ if __name__ == "__main__":
             "text_tokenizer_kwargs": new_tokenizer_kwargs,
             "code_tokenizer_kwargs": new_tokenizer_kwargs,
             "link_tokenizer_kwargs": new_tokenizer_kwargs,
-            "post_text_normalizer_operations": {},
+            # "post_text_normalizer_operations": ,
         },
     )
     db_connection = DBConnection(DB_PARAMS)

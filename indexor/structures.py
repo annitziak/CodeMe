@@ -17,6 +17,53 @@ PostingList = namedtuple("PostingList", ["doc_id", "doc_term_frequency", "positi
 
 
 @dataclass
+class DocMetadata:
+    creationdate: str
+    score: int
+    viewcount: int
+    owneruserid: int
+    ownerdisplayname: str
+    tags: str
+    answercount: int
+    commentcount: int
+    favoritecount: int
+
+    doc_length: int = 0
+
+    @staticmethod
+    def default():
+        return DocMetadata("", 0, 0, 0, "", "", 0, 0, 0)
+
+    def __post_init__(self):
+        if not self.ownerdisplayname:
+            self.ownerdisplayname = ""
+        if not self.tags:
+            self.tags = ""
+        if not self.creationdate:
+            self.creationdate = ""
+        if not isinstance(self.creationdate, str):
+            self.creationdate = str(time.mktime(self.creationdate.timetuple()))
+        if not self.score:
+            self.score = 0
+        if not self.viewcount:
+            self.viewcount = 0
+        if not self.owneruserid:
+            self.owneruserid = 0
+        if not self.answercount:
+            self.answercount = 0
+        if not self.commentcount:
+            self.commentcount = 0
+        if not self.favoritecount:
+            self.favoritecount = 0
+
+        self.owneruserid = max(0, self.owneruserid)
+        self.viewcount = max(0, self.viewcount)
+        self.answercount = max(0, self.answercount)
+        self.commentcount = max(0, self.commentcount)
+        self.favoritecount = max(0, self.favoritecount)
+
+
+@dataclass
 class MutablePostingList:
     doc_id: int
     doc_term_frequency: int
@@ -71,7 +118,7 @@ class Term:
             posting_list[-1] = "..."
         str_posting_list = pprint.pformat(posting_list)
 
-        return f"{self.term}({self.document_frequency},{str_posting_list})"
+        return f"{self.term.__str__()}({self.document_frequency},{str_posting_list})"
 
     def __repr__(self):
         return f"{self.document_frequency}"

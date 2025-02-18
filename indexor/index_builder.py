@@ -8,8 +8,10 @@ from filelock import FileLock
 
 from indexor.index_builder.index_builder import DocumentShardedIndexBuilder
 from indexor.index_builder.index_merger import IndexMerger
+from indexor.structures import DocMetadata
 
 from preprocessing.preprocessor import Preprocessor
+from preprocessing.tokenizer import BuildTokenizer
 from utils.db_connection import DBConnection
 
 logging.basicConfig(
@@ -32,6 +34,7 @@ class IndexBuilder:
         debug=False,
         action: str = "build",
         is_sharded=False,
+        tokenizer_type: str = "split-variables",
     ) -> None:
         """
         Args:
@@ -59,8 +62,20 @@ class IndexBuilder:
         self.action = action
         self.is_sharded = is_sharded
 
-        self.title_preprocessor = Preprocessor(parser_kwargs={"parser_type": "raw"})
-        self.body_preprocessor = Preprocessor(parser_kwargs={"parser_type": "html"})
+        self.base_tokenizer_kwargs = BuildTokenizer(tokenizer_type)
+        self.tokenizer_kwargs = {
+            "code_tokenizer_kwargs": self.base_tokenizer_kwargs,
+            "text_tokenizer_kwargs": self.base_tokenizer_kwargs,
+            "link_tokenizer_kwargs": self.base_tokenizer_kwargs,
+        }
+        print(self.tokenizer_kwargs)
+        self.title_preprocessor = Preprocessor(
+            parser_kwargs={"parser_type": "raw"}, tokenizer_kwargs=self.tokenizer_kwargs
+        )
+        self.body_preprocessor = Preprocessor(
+            parser_kwargs={"parser_type": "html"},
+            tokenizer_kwargs=self.tokenizer_kwargs,
+        )
 
         self.debug = debug
         self.config = {
@@ -239,7 +254,11 @@ class IndexBuilder:
             cur = conn.get_cursor(name=f"index_builder_{shard}")
             # include tags???
             debug = "LIMIT 100" if self.debug else ""
-            select_query = f"""SELECT id, title, body FROM posts WHERE id >= {start} AND id <= {end} ORDER BY id ASC {debug}"""
+            select_query = f"""SELECT
+            id, title, body, creationdate, score, viewcount, owneruserid, ownerdisplayname, tags, answercount, commentcount, favoritecount
+            FROM posts
+            WHERE id >= {start} AND id <= {end}
+            ORDER BY id ASC {debug}"""
             cur.execute(select_query)
             logger.info(
                 "Processing shard %d: %d-%d with query %s",
@@ -257,13 +276,17 @@ class IndexBuilder:
                     )
                     break
 
-                for post_id, doc_terms, doc_length in self._process_posts_batch(batch):
+                for (
+                    post_id,
+                    doc_terms,
+                    doc_metadata,
+                ) in self._process_posts_batch(batch):
                     if post_id < min_id:
                         min_id = post_id
                     if post_id > max_id:
                         max_id = post_id
 
-                    index_builder.add_document(post_id, doc_terms, doc_length)
+                    index_builder.add_document(post_id, doc_terms, doc_metadata)
 
         logger.info(f"Processed shard {shard}: {start}-{end} => {str(index_builder)}")
         index_builder.flush(shard)
@@ -284,7 +307,8 @@ class IndexBuilder:
             postition_offset: int
         """
         for row in rows:
-            post_id, title, body = row
+            post_id, title, body, *raw_doc_metadata = row
+            doc_metadata = DocMetadata(*raw_doc_metadata)
 
             doc_terms = {}
             position_offset = 0
@@ -299,15 +323,20 @@ class IndexBuilder:
                         if word.term not in doc_terms.keys():
                             doc_terms[word.term] = [
                                 word.start_position + position_offset
+                                if word.start_position >= 0
+                                else -1
                             ]
                         else:
                             doc_terms[word.term].append(
                                 word.start_position + position_offset
+                                if word.start_position >= 0
+                                else -1
                             )
 
                     position_offset += block.block_length
 
-            yield post_id, doc_terms, position_offset
+            doc_metadata.doc_length = position_offset
+            yield post_id, doc_terms, doc_metadata
 
     def _tokenize(self, text: str, field: str = "body"):
         if field == "title":
@@ -454,6 +483,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("--write-index-to-txt", action="store_true")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument(
+        "--tokenizer-type",
+        type=str,
+        choices=["keep-split-variables", "split-variables"],
+        default="split-variables",
+    )
     args = parser.parse_args()
 
     DB_PARAMS["database"] = args.db_name

@@ -8,7 +8,7 @@ import filelock
 from collections import OrderedDict
 
 from indexor.index_builder.constants import SIZE_KEY
-from indexor.structures import Term
+from indexor.structures import DocMetadata, Term
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ class DocumentShardedIndexBuilder:
 
         self.shard_size = shard_size
         self.term_map: dict[str, Term] = {}
-        self.doc_map: dict[int, int] = {}
+        self.doc_map: dict[int, DocMetadata] = {}
 
         self.current_docs = 0
         self.doc_count = 0
@@ -70,7 +70,10 @@ class DocumentShardedIndexBuilder:
         return ""
 
     def add_document(
-        self, doc_id: int, doc_terms: dict[str, list[int]] = {}, doc_length=0
+        self,
+        doc_id: int,
+        doc_terms: dict[str, list[int]] = {},
+        doc_metadata=DocMetadata.default(),
     ):
         """
         Add a document to the index.
@@ -93,7 +96,7 @@ class DocumentShardedIndexBuilder:
 
             self.term_map[term].update_with_postings(doc_id, positions)
 
-        self.doc_map[doc_id] = doc_length
+        self.doc_map[doc_id] = doc_metadata
         if self.current_docs >= self.shard_size:
             self.flush(self.shard, self.curr_shard)
 
@@ -149,9 +152,55 @@ class DocumentShardedIndexBuilder:
         logger.debug(f"Locking {doc_map_path}")
         with lock_flush_file, lock_offset_file:
             with open(doc_map_path, "wb") as f:
-                for doc_id, doc_length in self.doc_map.items():
+                for doc_id, doc_metadata in self.doc_map.items():
                     doc_offset_dict[doc_id] = f.tell()
-                    f.write(struct.pack(SIZE_KEY["doc_length"], doc_length))
+                    f.write(
+                        struct.pack(SIZE_KEY["doc_length"], doc_metadata.doc_length)
+                    )
+                    f.write(struct.pack(SIZE_KEY["doc_score"], doc_metadata.score))
+                    f.write(
+                        struct.pack(SIZE_KEY["doc_viewcount"], doc_metadata.viewcount)
+                    )
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_owneruserid"], doc_metadata.owneruserid
+                        )
+                    )
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_answercount"], doc_metadata.answercount
+                        )
+                    )
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_commentcount"], doc_metadata.commentcount
+                        )
+                    )
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_favoritecount"], doc_metadata.favoritecount
+                        )
+                    )
+                    raw_bytes_display_name = doc_metadata.ownerdisplayname.encode(
+                        "utf-8"
+                    )
+                    display_name_size = len(raw_bytes_display_name)
+                    f.write(
+                        struct.pack(SIZE_KEY["doc_ownerdisplayname"], display_name_size)
+                    )
+                    f.write(raw_bytes_display_name)
+
+                    raw_bytes_tags = doc_metadata.tags.encode("utf-8")
+                    tags_size = len(raw_bytes_tags)
+                    f.write(struct.pack(SIZE_KEY["doc_tags"], tags_size))
+                    f.write(raw_bytes_tags)
+
+                    raw_creationdate = doc_metadata.creationdate.encode("utf-8")
+                    creationdate_size = len(raw_creationdate)
+                    f.write(
+                        struct.pack(SIZE_KEY["doc_creationdate"], creationdate_size)
+                    )
+                    f.write(raw_creationdate)
 
             with open(doc_offset, "wb") as f:
                 f.write(struct.pack(SIZE_KEY["doc_count"], len(doc_offset_dict)))

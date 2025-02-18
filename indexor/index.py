@@ -2,6 +2,7 @@ import logging
 
 from indexor.structures import Term, PostingList, IndexBase
 from indexor.indexor_utils import build_index
+from indexor.query import BooleanQuery, Query
 
 
 logging.basicConfig(
@@ -47,6 +48,12 @@ class Index(IndexBase):
     def get_all_documents(self):
         return self.index.get_all_documents()
 
+    def search(self, query: Query, limit: int = -1):
+        if limit == -1:
+            limit = 100_000
+
+        return self.index.search(query, limit=limit)
+
     def get_intersection(self, terms: list[str]) -> list[int]:
         return self.index.get_intersection(terms)
 
@@ -58,6 +65,9 @@ class Index(IndexBase):
 
     def get_document_count(self) -> int:
         return self.index.get_document_count()
+
+    def get_document_metadata(self, doc_id: int) -> dict:
+        return self.index.get_document_metadata(doc_id)
 
     def get_term_count(self) -> int:
         return self.index.get_term_count()
@@ -104,7 +114,7 @@ if __name__ == "__main__":
             f.write(f"{doc_id} : {term_str}")
             f.write("\n")
     """
-    # print(f"DocumentCount={index.get_document_count()}")
+    print(f"DocumentCount={index.get_document_count()}")
     print(f"TermCount={index.get_term_count()}")
 
     while True:
@@ -154,6 +164,16 @@ if __name__ == "__main__":
                 term_obj = index.get_posting_list(term, 15198967)
                 print(f"Time taken for get_posting_list: {time.time() - start}")
                 print(term_obj)
+            elif term[:2] == "d ":
+                doc_id = int(term[2:])
+                doc_obj = index.get_document_metadata(doc_id)
+                print(f"Time taken for get_document_metadata: {time.time() - start}")
+                print(doc_obj)
+            elif term[:2] == "s ":
+                query = BooleanQuery(term[2:])
+                doc_obj = index.search(query)
+                print(f"Time taken for query: {time.time() - start}")
+                print(doc_obj)
             else:
                 term_obj = index.get_term(term, positions=False)
                 print(f"Time taken for get_term: {time.time() - start}")
