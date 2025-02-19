@@ -3,17 +3,26 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from datetime import datetime
 from sklearn.preprocessing import MinMaxScaler
+from transformers import AutoTokenizer, AutoModel
+import torch
+from scipy.spatial.distance import cosine
+
 
 class Reranker:
     def __init__(self):
         self.metadata = None
         self.load()
+        self.tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
+        self.model = AutoModel.from_pretrained("microsoft/codebert-base")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = self.model.to(self.device)
 
     def load(self):
         #temporary
+        # this just has only the data we 
         self.metadata = pd.read_csv("data/metadata_processed.csv")
 
-    def rerank(self, retrieved_documents):
+    def rerank_metadata(self, retrieved_documents):
         "rerank the top retrieved documents based on metadata"
         
         # only get useful docs
@@ -45,4 +54,30 @@ class Reranker:
         ranked_documents = metadata_df.sort_values(by="ranking_score", ascending=False)["id"].tolist()
 
         return ranked_documents
-#will give list and will rerank the top based on metadata
+    
+    def rerank_lm(self, retrieved_documents, query, lm_queries):
+        "rerank the top retrieved documents based on language model"
+        #lm_queries is doc_id : encoded query
+
+        # Encode the query
+        encoded_query_tokenized = self.tokenizer(query, return_tensors="pt", padding=True, truncation=True).to(self.device)
+        with torch.no_grad():
+            outputs = self.model(**encoded_query_tokenized)
+        encoded_query = outputs.last_hidden_state.mean(dim=1).cpu().numpy()  # Get the mean embedding?
+
+        # Rerank documents based on cosine similarity
+        reranked_documents = []
+        for doc_id in retrieved_documents:
+            doc_embedding = lm_queries[doc_id]
+
+            # Compute cosine similarity
+            similarity = 1 - cosine(encoded_query.flatten(), doc_embedding.flatten())  # Cosine similarity
+            
+            reranked_documents.append((doc_id, similarity))
+
+        # Sort documents by similarity (higher is better)
+        reranked_documents.sort(key=lambda x: x[1], reverse=True)
+
+        # Return only document IDs in sorted order
+        return [doc_id for doc_id, _ in reranked_documents]
+

@@ -7,12 +7,14 @@ import numpy as np
 import os
 from transformers import AutoTokenizer, AutoModel
 from textblob import TextBlob
+import random
 
 
 def preprocess_query(query: str) -> list:
     """
     Preprocess the input query (placeholder depending on what we preprocessed on index) - returns a list
     """
+    # here we actually need to enter the preprocessing done on index 
     return query.lower().split()
 
 def query_expansion(preprocessed_query: list, embedding_model, top_k=1) -> list:
@@ -21,12 +23,19 @@ def query_expansion(preprocessed_query: list, embedding_model, top_k=1) -> list:
     """
     if not embedding_model:
         return preprocessed_query  # No expansion if model is missing
+    
+    max_extra_words = 10 
+    
+    expanded_terms = set(preprocessed_query)  # Ensure uniqueness
+    extra_words_added = 0
 
-    expanded_terms = set(preprocessed_query)  #ensure uniqueness
     for word in preprocessed_query:
-        #add one extra word per term
-        expanded_terms.update(embedding_model.find_similar_words(word, top_k))
-
+        if extra_words_added >= max_extra_words:
+            break  # Stop if we have added enough words to not loose computational efficiency
+        new_words = embedding_model.find_similar_words(word, top_k= random.choice([1,2,3]))
+        expanded_terms.update(new_words)
+        extra_words_added += len(new_words)
+    
     return list(expanded_terms) 
 
 def compute_bm25(token, index, k1=1.5, b=0.75):
@@ -37,6 +46,7 @@ def compute_bm25(token, index, k1=1.5, b=0.75):
     doc_lengths = index.doc_lengths if hasattr(index, 'doc_lengths') else {}  
 
     if token not in inverted_index:
+        #maybe here we can use a more advanced spell checker
         blob = TextBlob(token)
         corrected = str(blob.correct())
 
@@ -129,7 +139,7 @@ def boolean_search(query: str, index):
 
     return sorted(operands.pop()) if operands else []
 
-def retrieval_function(query, index, embedding_model=None, expansion=False, k=10):
+def retrieval_function(query, index, embedding_model=None, expansion=False, k=50):
     """
     Determines if a Boolean search is needed; otherwise, falls back to BM25.
     """
@@ -145,7 +155,8 @@ def retrieval_function(query, index, embedding_model=None, expansion=False, k=10
     print("Starting ranked search")
     tokens = preprocess_query(query)
     #do query expansion
-    if expansion and embedding_model and len(tokens) <= 6:
+
+    if expansion and embedding_model and len(tokens) <= 10:
         #make sure they are unique
         tokens = list(set(tokens + query_expansion(tokens, embedding_model)))
 
@@ -159,8 +170,23 @@ def retrieval_function(query, index, embedding_model=None, expansion=False, k=10
     tokens.extend([token for token in tokens if token in boosted_terms])
 
     aggregated_scores = defaultdict(float)
+
+    #in case they place a very large query - limit to 20 tokens
+    if len(tokens)>20:
+        #random ones or most important ones
+        tokens = tokens[:20]
+
     for token in tokens:
         for docno, score in compute_bm25(token, index).items():
             aggregated_scores[docno] += score
     #sorted or if no results then return a list of random documents - this can be the most recent documents lets see
-    return sorted(aggregated_scores, key=aggregated_scores.get, reverse=True)[:k] if aggregated_scores else ['818020', '816834', '1731441', '1477365',]
+    if aggregated_scores: 
+
+        sorted_docs = sorted(aggregated_scores, key=aggregated_scores.get, reverse=True)
+        if len(sorted_docs)<k:
+            #needs testing 
+            return sorted_docs + random.choices(index.get_all_documents(), k=k-len(sorted_docs))
+        return sorted_docs[:k] 
+    
+    #return just the most popular ones or random ones - you choose.
+    return ['818020', '816834', '1731441', '1477365',] #list of most popular documents - populate with 50 documents
