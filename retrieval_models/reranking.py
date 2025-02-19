@@ -25,14 +25,14 @@ class Reranker:
     def rerank_metadata(self, retrieved_documents):
         "rerank the top retrieved documents based on metadata"
         
-        # only get useful docs
+        # only get useful documents
         metadata_df = self.metadata[self.metadata["id"].isin(retrieved_documents)].copy()
 
         if metadata_df.empty:
             print("⚠ Warning: No retrieved documents found in metadata.")
             return retrieved_documents
 
-        # Features for ranking - these showed the most discimination in the EDA
+        # Features for ranking - these showed the most discrimination in the EDA
         features = ["score", "viewcount",  "commentcount", "reputation_user", "days_since_creation"]
 
         # Normalize features
