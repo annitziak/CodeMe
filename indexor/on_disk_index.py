@@ -25,6 +25,7 @@ from indexor.query import (
     PhraseQuery,
     ProximityQuery,
 )
+from utils.varint import decode_bytes_jit as decode_bytes
 
 logging.basicConfig(
     format=f"%(asctime)s - %(name)s - {os.getpid()} - %(levelname)s - %(message)s"
@@ -79,17 +80,9 @@ def process_posting_block(
     current_pos = 0
 
     for i in range(min(postings_count, limit)):
-        delta = from_bytes(posting_data[current_pos : current_pos + 4])
-        term_frequency = from_bytes(
-            posting_data[current_pos + 4 : current_pos + 4 + 2],
-        )
-        position_count = from_bytes(
-            posting_data[
-                current_pos + deltaTF_size : current_pos
-                + deltaTF_size
-                + position_count_size
-            ],
-        )
+        delta, offset = decode_bytes(posting_data, 0)
+        term_frequency, offset = decode_bytes(posting_data, offset)
+        position_count, offset = decode_bytes(posting_data, offset)
 
         current_pos += position_count_size + deltaTF_size
         current_doc_id += delta
@@ -101,7 +94,7 @@ def process_posting_block(
     return doc_ids, term_frequencies, position_counts
 
 
-def _read_fst(fst, term: str | bytes, is_sharded=True):
+def _read_fst(fst, term: str | bytes, is_sharded=True, size_key=SIZE_KEY["pos_offset"], shard_size_key=SIZE_KEY["pos_offset_shard"]):
     if isinstance(term, str):
         term_bytes = term.encode("utf-8")
     else:
@@ -111,23 +104,23 @@ def _read_fst(fst, term: str | bytes, is_sharded=True):
 
     if is_sharded:
         if encoded is None:
-            raise ValueError(f"Term {term} not found in index")
+            return 
 
         for encoding in encoded:
-            shard, offset, pos_offset = struct.unpack(
-                SIZE_KEY["pos_offset_shard"], encoding
+            shard, *values = struct.unpack(
+                shard_size_key, encoding
             )
-            yield shard, offset, pos_offset
+            yield shard, *values
         return
 
     if encoded is None:
         yield -1, -1, -1
         return
 
-    unpacked = [struct.unpack(SIZE_KEY["pos_offset"], x) for x in encoded]
+    unpacked = [struct.unpack(size_key, x) for x in encoded]
     assert len(encoded) == 1, f"Term {term} not found in index {unpacked}"
     logger.info(f"Unpacked: {unpacked}")
-    yield -1, unpacked[0][0], unpacked[0][1]
+    yield -1, *unpacked[0]
 
 
 class MMappedFile:
@@ -291,7 +284,7 @@ class ShardWorker:
         )
         glob_pattern_docs = "doc_shard_*.index" if is_sharded else "docs.bin"
         glob_pattern_docs_offset = (
-            "doc_shard_*.offset" if is_sharded else "docs_offset.bin"
+            "doc_shard_*.offset" if is_sharded else "docs.offset"
         )
 
         self.postings_mmaps = MMappedReader(
@@ -758,6 +751,9 @@ class OnDiskIndex(IndexBase):
         self.term_cache = TermCache()
 
         self.num_shards = len(self.doc_bounds)
+    
+    def __del__(self):
+        self.worker_pool.shutdown()
 
     def _load_fst(self, filename):
         fst = marisa_trie.BytesTrie()
@@ -861,15 +857,7 @@ class OnDiskIndex(IndexBase):
         return self.get_term(term).document_frequency
 
     def get_document_metadata(self, doc_id: int, keys=["all"]) -> dict:
-        value = self.doc_fst.get(str(doc_id))
-        if value is None:
-            try_again = self.doc_fst.get(str(doc_id)[:-2])
-            final = self.doc_fst.get(str(doc_id)[:-1])
-            raise ValueError(
-                f"Document {doc_id} not found in index of length {len(self.doc_fst)} {try_again} {final} {list(self.doc_fst.keys())[:10]}"
-            )
-
-        shard, offset = struct.unpack(SIZE_KEY["offset_shard"], value[0])
+        shard, offset = list(_read_fst(self.doc_fst, str(doc_id), is_sharded=self.is_sharded, size_key=SIZE_KEY["offset"], shard_size_key=SIZE_KEY["offset_shard"]))[0]
         future = self.worker_pool.submit(
             worker_get_document_metadata, doc_id, shard=shard, offset=offset, keys=keys
         )
@@ -877,15 +865,7 @@ class OnDiskIndex(IndexBase):
         return future.result()
 
     def get_document_length(self, doc_id: int) -> int:
-        value = self.doc_fst.get(str(doc_id))
-        if value is None:
-            try_again = self.doc_fst.get(str(doc_id)[:-2])
-            final = self.doc_fst.get(str(doc_id)[:-1])
-            raise ValueError(
-                f"Document {doc_id} not found in index of length {len(self.doc_fst)} {try_again} {final} {list(self.doc_fst.keys())[:10]}"
-            )
-
-        shard, offset = struct.unpack(SIZE_KEY["offset_shard"], value[0])
+        shard, offset = list(_read_fst(self.doc_fst, str(doc_id), is_sharded=self.is_sharded, size_key=SIZE_KEY["offset"], shard_size_key=SIZE_KEY["offset_shard"]))[0]
         future = self.worker_pool.submit(
             worker_get_document_metadata, doc_id, shard=shard, offset=offset
         )

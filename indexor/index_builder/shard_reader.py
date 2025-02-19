@@ -4,6 +4,7 @@ import logging
 
 from indexor.index_builder.constants import SIZE_KEY, READ_SIZE_KEY
 from indexor.structures import PostingList
+from utils.varint import decode_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -66,32 +67,21 @@ class ShardReader:
     def read_postings(self, offset: int, pos_offset=-1) -> list[PostingList]:
         self.f_shard.seek(offset)
 
-        count = struct.unpack(
-            SIZE_KEY["postings_count"],
-            self.f_shard.read(READ_SIZE_KEY[SIZE_KEY["postings_count"]]),
-        )[0]
+        count = decode_bytes(self.f_shard)
         postings = []
         curr_doc_id = 0
 
         for _ in range(count):
-            doc_id_delta, doc_term_frequency = struct.unpack(
-                SIZE_KEY["deltaTF"],
-                self.f_shard.read(READ_SIZE_KEY[SIZE_KEY["deltaTF"]]),
-            )
-            position_count = struct.unpack(
-                SIZE_KEY["position_count"],
-                self.f_shard.read(READ_SIZE_KEY[SIZE_KEY["position_count"]]),
-            )[0]
+            doc_id_delta = decode_bytes(self.f_shard)
+            doc_term_frequency = decode_bytes(self.f_shard)
+            position_count = decode_bytes(self.f_shard)
             curr_doc_id += doc_id_delta
 
             positions = []
             if pos_offset >= 0:
                 curr_position = 0
                 for _ in range(position_count):
-                    position_delta = struct.unpack(
-                        SIZE_KEY["position_delta"],
-                        self.f_position.read(READ_SIZE_KEY[SIZE_KEY["position_delta"]]),
-                    )[0]
+                    position_delta = decode_bytes(self.f_position)
                     curr_position += position_delta
                     positions.append(curr_position)
 

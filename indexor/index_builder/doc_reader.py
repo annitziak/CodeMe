@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 def read_doc(shard_f, offset_f, sub_shard_f, sub_offset_f, docs_offset={}):
+    local_doc_count = 0
     try:
         local_doc_count = struct.unpack(
             SIZE_KEY["doc_count"],
@@ -18,6 +19,8 @@ def read_doc(shard_f, offset_f, sub_shard_f, sub_offset_f, docs_offset={}):
                 SIZE_KEY["doc_id"],
                 sub_offset_f.read(READ_SIZE_KEY[SIZE_KEY["doc_id"]]),
             )[0]
+            # OFFSET IS ONE HERE
+            # MISSING ONE DOC 9999
             offset = struct.unpack(
                 SIZE_KEY["offset"],
                 sub_offset_f.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
@@ -94,7 +97,9 @@ def read_doc(shard_f, offset_f, sub_shard_f, sub_offset_f, docs_offset={}):
     except struct.error as e:
         import traceback
 
-        logger.error(f"Error reading {shard_f} after length {len(docs_offset)} {e}")
+        logger.error(
+            f"Error reading {shard_f} after length {len(docs_offset)} {e} {local_doc_count}"
+        )
         logger.error(traceback.format_exc())
 
         raise ValueError()

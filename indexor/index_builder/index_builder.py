@@ -9,6 +9,7 @@ from collections import OrderedDict
 
 from indexor.index_builder.constants import SIZE_KEY
 from indexor.structures import DocMetadata, Term
+from utils.varint import encode
 
 logger = logging.getLogger(__name__)
 
@@ -305,37 +306,26 @@ class DocumentShardedIndexBuilder:
                     assert (
                         term_obj.document_frequency == len(term_obj.posting_lists)
                     ), f"Document frequency {term_obj.document_frequency} does not match the number of posting lists {(term_obj.posting_lists)}"
-                    f.write(
-                        struct.pack(
-                            SIZE_KEY["postings_count"], term_obj.document_frequency
-                        )
-                    )
+                    f.write(encode(term_obj.document_frequency))
 
                     prev_doc_id = 0
                     position_offset_dict[term] = pos_f.tell()
 
-                    for idx, posting in enumerate(term_obj.posting_lists):
+                    for _, posting in enumerate(term_obj.posting_lists):
                         delta = posting.doc_id - prev_doc_id
 
-                        f.write(
-                            struct.pack(
-                                SIZE_KEY["deltaTF"], delta, posting.doc_term_frequency
-                            )
-                        )
+                        f.write(encode(delta))
+                        f.write(encode(posting.doc_term_frequency))
                         prev_doc_id = posting.doc_id
 
                         filter_positions = [p for p in posting.positions if p >= 0]
                         filter_positions = sorted(filter_positions)
-                        f.write(
-                            struct.pack(
-                                SIZE_KEY["position_count"], len(filter_positions)
-                            )
-                        )
+                        f.write(encode(len(filter_positions)))
 
                         prev_position = 0
                         for position in filter_positions:
-                            delta = position - prev_position
-                            pos_f.write(struct.pack(SIZE_KEY["position_delta"], delta))
+                            pos_delta = position - prev_position
+                            pos_f.write(encode(pos_delta))
                             prev_position = position
 
         logger.debug(f"Unlocked {frequency_path}")

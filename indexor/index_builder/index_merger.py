@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from indexor.index_builder.constants import SIZE_KEY, READ_SIZE_KEY
 from indexor.index_builder.shard_reader import ShardReader
 from indexor.index_builder.doc_reader import read_doc
+from utils.varint import encode
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class IndexMerger:
             logger.info(f"Removing existing index directory: {self.output_dir}")
 
             for f in os.listdir(self.output_dir):
-                if "shard" in f or "postings" in f or "terms" in f or "positions" in f:
+                if "shard" in f or "postings" in f or "terms" in f or "positions" in f or "docs" in f:
                     if "finished" in f:
                         continue
 
@@ -203,8 +204,6 @@ class IndexMerger:
             encoded_value = struct.pack(SIZE_KEY["offset_shard"], shard, offset)
             items.append((str(doc_id), encoded_value))
 
-        print(len(items))
-
         fst = marisa_trie.BytesTrie(items)
         fst.save(os.path.join(self.output_dir, f"{save_filename}.fst"))
         # datrie = self.build_datrie_from_generator(gen_term_offset(term_offsets))
@@ -247,7 +246,19 @@ class IndexMerger:
             save_filename="postings",
             force_merge=True,
         )
-        self._merge_docs(force_merge=True)
+        shard, min_doc_id, max_doc_id = self._merge_docs(force_merge=True)
+
+        if shard == -1:
+            bounds = {shard: (min_doc_id, max_doc_id)}
+            doc_meta = os.path.join(self.index_path, "shard.temp.meta")
+            lock_doc_meta = filelock.FileLock(doc_meta + ".lock")
+            with lock_doc_meta:
+                with open(doc_meta, "w") as f:
+                    json.dump(bounds, f)
+            logger.info(f"Saved document bounds {bounds} to {doc_meta}")
+
+            shutil.move(doc_meta, doc_meta.replace(".temp", ""))
+
 
     def _merge(
         self,
@@ -493,7 +504,7 @@ class IndexMerger:
             os.remove(shard_file)
 
     def _build_doc_fst(self, doc_offsets, save_filename="docs", shard=-1):
-        logger.info(f"Building FST for {len(doc_offsets)} docs")
+        logger.info(f"Building FST for {len(doc_offsets)} docs and saving to {save_filename}.fst")
         if os.path.exists(os.path.join(self.output_dir, f"{save_filename}.fst")):
             logger.info(f"Loading {save_filename}.fst")
             fst = marisa_trie.BytesTrie()
@@ -504,15 +515,23 @@ class IndexMerger:
                 if doc_id in doc_offsets:
                     continue
 
-                doc_offsets[int(doc_id)] = struct.unpack(
-                    SIZE_KEY["offset_shard"], values
-                )[0]
+                if "_" in save_filename:
+                    doc_offsets[int(doc_id)] = struct.unpack(
+                        SIZE_KEY["offset_shard"], values
+                    )[0]
+                else:
+                    doc_offsets[int(doc_id)] = struct.unpack(
+                        SIZE_KEY["offset"], values
+                    )[0]
 
         items = []
         for doc_id, offset in doc_offsets.items():
-            items.append(
-                (str(doc_id), struct.pack(SIZE_KEY["offset_shard"], shard, offset))
-            )
+            if shard != -1:
+                items.append(
+                    (str(doc_id), struct.pack(SIZE_KEY["offset_shard"], shard, offset)))
+            else:
+                items.append((str(doc_id), struct.pack(SIZE_KEY["offset"], offset)))
+            
 
         fst = marisa_trie.BytesTrie(items)
         fst.save(os.path.join(self.output_dir, f"{save_filename}.fst"))
@@ -576,26 +595,19 @@ class IndexMerger:
         prev_doc_id = 0
         for posting in postings:
             delta = posting.doc_id - prev_doc_id
-            try:
-                f.write(
-                    struct.pack(SIZE_KEY["deltaTF"], delta, posting.doc_term_frequency)
-                )
-            except struct.error:
-                print(posting.doc_id, prev_doc_id)
-                print(posting.doc_term_frequency)
-                print(delta)
-                raise
+            f.write(encode(delta))
+            f.write(encode(posting.doc_term_frequency))
 
             prev_doc_id = posting.doc_id
 
             prev_position = 0
             filter_positions = [p for p in posting.positions if p >= 0]
-            f.write(struct.pack(SIZE_KEY["position_count"], len(filter_positions)))
+            f.write(encode(len(filter_positions)))
 
             if positions_file is not None:
                 for position in filter_positions:
                     delta = position - prev_position
-                    positions_file.write(struct.pack(SIZE_KEY["position_delta"], delta))
+                    positions_file.write(encode(delta))
                     prev_position = position
 
     def _merge_docs(self, shard=-1, sub_shard=0, force_merge=False):
@@ -673,7 +685,8 @@ class IndexMerger:
                         open(shard_file, "rb") as shard_f,
                         open(offset_filename, "rb") as roffset_f,
                     ):
-                        docs_offset = read_doc(docs_f, offset_f, shard_f, roffset_f)
+                        shard_f.seek(0)
+                        docs_offset = read_doc(docs_f, offset_f, shard_f, roffset_f, docs_offset=docs_offset)
 
                 for doc_id, offset in docs_offset.items():
                     offset_f.write(struct.pack(SIZE_KEY["doc_id"], doc_id))
