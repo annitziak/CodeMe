@@ -68,7 +68,7 @@ if __name__ == "__main__":
     index = Index(load_path=args.index_path)
     preprocessor = Preprocessor(parser_kwargs={"parser_type": "raw"})
     embedding_model = EmbeddingModel(
-        vocab=index.get_vocab(), save_path="data/embeddings.pkl"
+        vocab=index.get_vocab(), save_path="faiss_indexes/embeddin.pkl"
     )
     # reranker = Reranker()
 

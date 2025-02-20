@@ -4,22 +4,95 @@ from retrieval_models.retrieval_functions import *
 app = Flask(__name__)
 
 
-@app.route("/Queryrequest", methods=["POST"])
-def Queryrequest():
+@app.route("/search", methods=["GET"])
+def search():
+    """
+    Structure of the request:
+        query: str
+        page: int
+        page_size: int
+        # BELOW IS TENTATIVE TO SUPPORT HERE
+        filters: dict[ 
+            from_date: str
+            to_date: str
+            tags: list[str]
+        ]
+        options: dict[
+            expansion: bool
+            boost_terms: bool
+        ]
+    Structure of the response:
+        results: list[dict[
+            doc_id: int
+            score: float
+            view_count: int
+            owneruserid: int
+            answer_count: int
+            comment_count: int
+            favorite_count: int
+            ownerdisplayname: str
+            tags: str
+            creation_date: str
+            snippet: str ??? unsupported
+            title: str ??? unsupported
+        ]]
+
+    Error Codes:
+        200: OK
+        400: Bad Request
+        500: Internal Server Error
+    """
     query = request.form.get("query")  # Extract query
     filters = request.form.getlist("filters")  # Extract multiple filter values
 
     result = reorder_as_per_filter(query, filters)  # Apply filters
 
-    # Instead of redirecting, directly call Queryresponse function
-    return Queryresponse(result)
+    return jsonify({"result": result}), 200
 
+@app.route("/advanced_search", methods=["GET"])
+def search():
+    """
+    Structure of the request:
+        query: str
+        page: int
+        page_size: int
+        # BELOW IS TENTATIVE TO SUPPORT HERE
+        filters: dict[ 
+            from_date: str
+            to_date: str
+            tags: list[str]
+        ]
+        options: dict[
+            expansion: bool
+            boost_terms: bool
+        ]
+    Structure of the response:
+        results: list[dict[
+            doc_id: int
+            score: float
+            view_count: int
+            owneruserid: int
+            answer_count: int
+            comment_count: int
+            favorite_count: int
+            ownerdisplayname: str
+            tags: str
+            creation_date: str
+            snippet: str ??? unsupported
+            title: str ??? unsupported
+        ]]
 
-@app.route("/Queryresponse", methods=["GET"])
-def Queryresponse():
-    result = request.args.getlist("result")  # Extract result from query params
-    return jsonify({"result": result})  # Return response in JSON format
+    Error Codes:
+        200: OK
+        400: Bad Request
+        500: Internal Server Error
+    """
+    query = request.form.get("query")  # Extract query
+    filters = request.form.getlist("filters")  # Extract multiple filter values
 
+    result = reorder_as_per_filter(query, filters)  # Apply filters
+
+    return jsonify({"result": result}), 200
 
 def retreival_function(query):
     return ["doc1", "doc2", "doc3"]
