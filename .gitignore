@@ -10,3 +10,4 @@ tokenizer.json
 
 Cargo.lock
 target
+node_modules/
