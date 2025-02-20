@@ -1,6 +1,6 @@
 # Text Technologies for Data Science CW3
 
-`potential_ideas.md` contains potential project ideas i.e. potential corpora to use and specific features of the system to be included
+`overleaf template`: https://www.overleaf.com/2676595266skngybhhvwns#52cd43
 
 ## Enviornment Setup
 Python v3.10.12 is used in the project. It is unclear if the code will work with other versions of Python.
