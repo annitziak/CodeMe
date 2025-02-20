@@ -2,6 +2,7 @@ import re
 
 from dataclasses import dataclass
 
+from preprocessing import Block
 from preprocessing.preprocessor import Preprocessor
 
 DEFAULT_PREPROCESSOR = Preprocessor(parser_kwargs={"parser_type": "raw"})
@@ -33,6 +34,31 @@ class TermQuery(Query):
 
     def parse(self):
         return self.preprocessor(self.query)
+
+
+class FreeTextQuery(Query):
+    def __init__(self, query, preprocessor=DEFAULT_PREPROCESSOR):
+        super().__init__(query, preprocessor)
+
+        self.parsed_query = self.parse()
+
+    def parse(self):
+        def _parse():
+            if isinstance(self.query, str):
+                return self.preprocessor(self.query)
+            elif isinstance(self.query, list):
+                if all(isinstance(token, Block) for token in self.query):
+                    return self.query
+                elif all(isinstance(token, str) for token in self.query):
+                    return self.preprocessor(" ".join(self.query))[0].words
+
+            raise ValueError(f"Invalid query type: {type(self.query)}")
+
+        query = _parse()
+        return [x.term for x in query]
+
+    def ppformat(self):
+        return " ".join(self.parsed_query)
 
 
 class PhraseQuery(Query):

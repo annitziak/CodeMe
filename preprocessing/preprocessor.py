@@ -53,12 +53,15 @@ class Preprocessor:
     def __call__(self, text):
         return self.preprocess(text)
 
-    def preprocess(self, text):
+    def preprocess(self, text, return_words=False):
         text_blocks = self.parser.parse(text)
         for text_block in text_blocks:
             tokenized_out = self.tokenizer(text_block)
             text_block.words = tokenized_out.tokenized_text
             text_block.block_length = tokenized_out.original_number_of_words
+
+        if return_words:
+            return [x.term for text_block in text_blocks for x in text_block.words]
 
         return text_blocks
 

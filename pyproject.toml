@@ -7,4 +7,4 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["utils", "constants", "preprocessing", "indexor", "data", "semantic_search"]
+packages = ["utils", "constants", "preprocessing", "indexor", "data", "semantic_search", "retrieval_models"]

@@ -13,6 +13,10 @@ def read_doc(shard_f, offset_f, sub_shard_f, sub_offset_f, docs_offset={}):
             SIZE_KEY["doc_count"],
             sub_offset_f.read(READ_SIZE_KEY[SIZE_KEY["doc_count"]]),
         )[0]
+        _ = struct.unpack(
+            SIZE_KEY["offset"],
+            sub_offset_f.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
+        )[0]
 
         for _ in range(local_doc_count):
             doc_id = struct.unpack(
@@ -94,7 +98,7 @@ def read_doc(shard_f, offset_f, sub_shard_f, sub_offset_f, docs_offset={}):
             )
             shard_f.write(creation_date.encode("utf-8"))
 
-    except struct.error as e:
+    except (struct.error, UnicodeDecodeError) as e:
         import traceback
 
         logger.error(

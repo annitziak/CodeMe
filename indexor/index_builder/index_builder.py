@@ -152,9 +152,11 @@ class DocumentShardedIndexBuilder:
         lock_offset_file = filelock.FileLock(doc_offset + ".lock")
         logger.debug(f"Locking {doc_map_path}")
         with lock_flush_file, lock_offset_file:
+            sum_doc_length = 0
             with open(doc_map_path, "wb") as f:
                 for doc_id, doc_metadata in self.doc_map.items():
                     doc_offset_dict[doc_id] = f.tell()
+                    sum_doc_length += doc_metadata.doc_length
                     f.write(
                         struct.pack(SIZE_KEY["doc_length"], doc_metadata.doc_length)
                     )
@@ -205,6 +207,7 @@ class DocumentShardedIndexBuilder:
 
             with open(doc_offset, "wb") as f:
                 f.write(struct.pack(SIZE_KEY["doc_count"], len(doc_offset_dict)))
+                f.write(struct.pack(SIZE_KEY["offset"], sum_doc_length))
                 for doc_id, offset in doc_offset_dict.items():
                     f.write(struct.pack(SIZE_KEY["doc_id"], doc_id))
                     f.write(struct.pack(SIZE_KEY["offset"], offset))

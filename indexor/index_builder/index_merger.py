@@ -51,7 +51,13 @@ class IndexMerger:
             logger.info(f"Removing existing index directory: {self.output_dir}")
 
             for f in os.listdir(self.output_dir):
-                if "shard" in f or "postings" in f or "terms" in f or "positions" in f or "docs" in f:
+                if (
+                    "shard" in f
+                    or "postings" in f
+                    or "terms" in f
+                    or "positions" in f
+                    or "docs" in f
+                ):
                     if "finished" in f:
                         continue
 
@@ -178,6 +184,10 @@ class IndexMerger:
                             SIZE_KEY["doc_count"],
                             f_offset.read(READ_SIZE_KEY[SIZE_KEY["doc_count"]]),
                         )[0]
+                        _ = struct.unpack(
+                            SIZE_KEY["offset"],
+                            f_offset.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
+                        )[0]
 
                         for _ in range(doc_count):
                             try:
@@ -258,7 +268,6 @@ class IndexMerger:
             logger.info(f"Saved document bounds {bounds} to {doc_meta}")
 
             shutil.move(doc_meta, doc_meta.replace(".temp", ""))
-
 
     def _merge(
         self,
@@ -400,69 +409,73 @@ class IndexMerger:
         lock_postings_file = filelock.FileLock(postings_file + ".lock")
         lock_positions_file = filelock.FileLock(positions_file + ".lock")
         logger.debug(f"Locking {postings_file}")
-        with lock_postings_file, lock_positions_file:
-            with (
-                open(postings_file, "wb") as postings_f,
-                open(positions_file, "wb") as positions_f,
-            ):
-                heap = []
-
-                for shard_file, position_file, offset_file in zip(
-                    shard_files, position_files, offset_files
+        try:
+            with lock_postings_file, lock_positions_file:
+                with (
+                    open(postings_file, "wb") as postings_f,
+                    open(positions_file, "wb") as positions_f,
                 ):
-                    reader = ShardReader(shard_file, position_file, offset_file)
-                    items = reader.next_term()
-                    if all(x is not None for x in items):
-                        heap.append(HeapItem(*items, reader))
-                    else:
-                        reader.close()
+                    heap = []
 
-                heapq.heapify(heap)
-                while heap:
-                    heap_item = heapq.heappop(heap)
-
-                    assert (heap_item.term, shard) not in term_offsets
-                    term_offsets[(heap_item.term, shard)] = (
-                        shard,
-                        postings_f.tell(),
-                        positions_f.tell(),
-                    )
-
-                    all_postings = heap_item.reader.read_postings(
-                        heap_item.offset,
-                        pos_offset=heap_item.pos_offset,
-                    )
-
-                    while heap and heap[0].term == heap_item.term:
-                        other_heap_item = heapq.heappop(heap)
-                        other_postings = other_heap_item.reader.read_postings(
-                            other_heap_item.offset,
-                            pos_offset=other_heap_item.pos_offset,
-                        )
-                        all_postings.extend(other_postings)
-
-                        items = other_heap_item.reader.next_term()
-
+                    for shard_file, position_file, offset_file in zip(
+                        shard_files, position_files, offset_files
+                    ):
+                        reader = ShardReader(shard_file, position_file, offset_file)
+                        items = reader.next_term()
                         if all(x is not None for x in items):
-                            heapq.heappush(
-                                heap, HeapItem(*items, other_heap_item.reader)
-                            )
+                            heap.append(HeapItem(*items, reader))
                         else:
-                            other_heap_item.reader.close()
+                            reader.close()
 
-                    all_postings.sort(key=lambda x: x.doc_id)
+                    heapq.heapify(heap)
+                    while heap:
+                        heap_item = heapq.heappop(heap)
 
-                    self._write_merged_postings(
-                        postings_f,
-                        postings=all_postings,
-                        positions_file=positions_f,
-                    )
+                        assert (heap_item.term, shard) not in term_offsets
+                        term_offsets[(heap_item.term, shard)] = (
+                            shard,
+                            postings_f.tell(),
+                            positions_f.tell(),
+                        )
 
-                    item = heap_item.reader.next_term()
-                    if all(x is not None for x in item):
-                        heapq.heappush(heap, HeapItem(*item, heap_item.reader))
-                    else:
-                        heap_item.reader.close()
+                        all_postings = heap_item.reader.read_postings(
+                            heap_item.offset,
+                            pos_offset=heap_item.pos_offset,
+                        )
+
+                        while heap and heap[0].term == heap_item.term:
+                            other_heap_item = heapq.heappop(heap)
+                            other_postings = other_heap_item.reader.read_postings(
+                                other_heap_item.offset,
+                                pos_offset=other_heap_item.pos_offset,
+                            )
+                            all_postings.extend(other_postings)
+
+                            items = other_heap_item.reader.next_term()
+
+                            if all(x is not None for x in items):
+                                heapq.heappush(
+                                    heap, HeapItem(*items, other_heap_item.reader)
+                                )
+                            else:
+                                other_heap_item.reader.close()
+
+                        all_postings.sort(key=lambda x: x.doc_id)
+
+                        self._write_merged_postings(
+                            postings_f,
+                            postings=all_postings,
+                            positions_file=positions_f,
+                        )
+
+                        item = heap_item.reader.next_term()
+                        if all(x is not None for x in item):
+                            heapq.heappush(heap, HeapItem(*item, heap_item.reader))
+                        else:
+                            heap_item.reader.close()
+        except Exception as e:
+            logger.error(f"Error merging {shard_files} {e}")
+
 
         logger.debug(f"Unlocked {postings_file}")
         shutil.move(postings_file, postings_file.replace(".temp", ""))
@@ -504,7 +517,9 @@ class IndexMerger:
             os.remove(shard_file)
 
     def _build_doc_fst(self, doc_offsets, save_filename="docs", shard=-1):
-        logger.info(f"Building FST for {len(doc_offsets)} docs and saving to {save_filename}.fst")
+        logger.info(
+            f"Building FST for {len(doc_offsets)} docs and saving to {save_filename}.fst"
+        )
         if os.path.exists(os.path.join(self.output_dir, f"{save_filename}.fst")):
             logger.info(f"Loading {save_filename}.fst")
             fst = marisa_trie.BytesTrie()
@@ -528,10 +543,10 @@ class IndexMerger:
         for doc_id, offset in doc_offsets.items():
             if shard != -1:
                 items.append(
-                    (str(doc_id), struct.pack(SIZE_KEY["offset_shard"], shard, offset)))
+                    (str(doc_id), struct.pack(SIZE_KEY["offset_shard"], shard, offset))
+                )
             else:
                 items.append((str(doc_id), struct.pack(SIZE_KEY["offset"], offset)))
-            
 
         fst = marisa_trie.BytesTrie(items)
         fst.save(os.path.join(self.output_dir, f"{save_filename}.fst"))
@@ -667,6 +682,7 @@ class IndexMerger:
         logger.debug(f"Locking {docs_file}")
         with lock_docs_file, lock_offset_file:
             doc_count = 0
+            sum_doc_length = 0
             for shard_file, offset_filename in zip(shard_files, offset_files):
                 with (
                     open(offset_filename, "rb") as roffset_f,
@@ -675,18 +691,29 @@ class IndexMerger:
                         SIZE_KEY["doc_count"],
                         roffset_f.read(READ_SIZE_KEY[SIZE_KEY["doc_count"]]),
                     )[0]
+                    sum_doc_length += struct.unpack(
+                        SIZE_KEY["offset"],
+                        roffset_f.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
+                    )[0]
 
             with open(docs_file, "wb") as docs_f, open(offset_file, "wb") as offset_f:
-                offset_f.seek(0)
-                offset_f.write(struct.pack(SIZE_KEY["doc_count"], doc_count))
-
                 for shard_file, offset_filename in zip(shard_files, offset_files):
                     with (
                         open(shard_file, "rb") as shard_f,
                         open(offset_filename, "rb") as roffset_f,
                     ):
                         shard_f.seek(0)
-                        docs_offset = read_doc(docs_f, offset_f, shard_f, roffset_f, docs_offset=docs_offset)
+                        docs_offset = read_doc(
+                            docs_f,
+                            offset_f,
+                            shard_f,
+                            roffset_f,
+                            docs_offset=docs_offset,
+                        )
+
+                offset_f.seek(0)
+                offset_f.write(struct.pack(SIZE_KEY["doc_count"], doc_count))
+                offset_f.write(struct.pack(SIZE_KEY["offset"], sum_doc_length))
 
                 for doc_id, offset in docs_offset.items():
                     offset_f.write(struct.pack(SIZE_KEY["doc_id"], doc_id))

@@ -48,6 +48,9 @@ class Index(IndexBase):
     def get_all_documents(self):
         return self.index.get_all_documents()
 
+    def get_vocab(self):
+        return self.index.get_vocab()
+
     def search(self, query: Query, limit: int = -1):
         if limit == -1:
             limit = 100_000
