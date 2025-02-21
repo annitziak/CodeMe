@@ -22,6 +22,7 @@ SIZE_KEY = {
     "doc_commentcount": "<I",
     "doc_favoritecount": "<I",
     "doc_creationdate": "<I",
+    "doc_metadatascore": "<f",
 }
 
 READ_SIZE_KEY = {
@@ -31,4 +32,5 @@ READ_SIZE_KEY = {
     "<IH": 6,
     "<HQ": 10,
     "<i": 4,
+    "<f": 4,
 }

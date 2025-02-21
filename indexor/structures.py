@@ -117,6 +117,28 @@ class DocMetadata:
             get_stat(json_data, "doc_length"),
         )
 
+    def __getitem__(self, key):
+        if key == "creationdate":
+            return self.creationdate
+        if key == "score":
+            return self.score
+        if key == "viewcount":
+            return self.viewcount
+        if key == "owneruserid":
+            return self.owneruserid
+        if key == "ownerdisplayname":
+            return self.ownerdisplayname
+        if key == "tags":
+            return self.tags
+        if key == "answercount":
+            return self.answercount
+        if key == "commentcount":
+            return self.commentcount
+        if key == "favoritecount":
+            return self.favoritecount
+        if key == "doc_length":
+            return self.doc_length
+
     def to_json(self):
         def get_stat(stat, key):
             return {
@@ -133,6 +155,7 @@ class DocMetadata:
             **get_stat(self.answercount, "answercount"),
             **get_stat(self.commentcount, "commentcount"),
             **get_stat(self.favoritecount, "favoritecount"),
+            **get_stat(self.doc_length, "doc_length"),
         }
 
     def __post_init__(self):

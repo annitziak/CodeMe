@@ -3,7 +3,7 @@ from back_end.search import load_backend
 from retrieval_models.retrieval_functions import *
 
 app = Flask(__name__)
-search_module = load_backend(".cache/index-10k-metadata2")
+search_module = load_backend(".cache/index-1m-custom-metadata")
 
 IDX_TO_ITEM = {
     0: "doc_id",
@@ -88,16 +88,15 @@ def search():
 
     has_next = False
     has_prev = False
-    total_results = len(result)
 
     return jsonify(
         {
-            "result": result,
+            "result": result.results,
             "page": page,
             "page_size": page_size,
             "has_next": has_next,
             "has_prev": has_prev,
-            "total_results": total_results,
+            "total_results": result.total_results,
         }
     ), 200
 
@@ -152,11 +151,11 @@ def advanced_search():
 
     has_next = False
     has_prev = False
-    total_results = len(result)
+    total_results = result.total_results
 
     return jsonify(
         {
-            "result": result,
+            "result": result.result,
             "page": page,
             "page_size": page_size,
             "has_next": has_next,

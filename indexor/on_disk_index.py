@@ -337,6 +337,7 @@ class ShardWorker:
 
         self.all_doc_metadata_keys = [
             "doc_length",
+            "metadatascore",
             "score",
             "viewcount",
             "owneruserid",
@@ -757,7 +758,10 @@ class ShardWorker:
             return {}
 
         ret = {}
-        for key in keys:
+        for key in self.all_doc_metadata_keys:
+            if key not in keys:
+                continue
+
             if key in ["ownerdisplayname", "tags"]:
                 size = struct.unpack(
                     SIZE_KEY[f"doc_{key}"],
@@ -1160,6 +1164,7 @@ class OnDiskIndex(IndexBase):
         with open(doc_meta_path, "w") as f:
             tags = [
                 "creationdate",
+                "metadatascore",
                 "score",
                 "viewcount",
                 "owneruserid",

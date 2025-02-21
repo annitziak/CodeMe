@@ -633,7 +633,27 @@ class IndexMerger:
                     positions_file.write(encode(delta))
                     prev_position = position
 
-    def _merge_docs(self, shard=-1, sub_shard=0, force_merge=False, minmax_stat=None):
+    def _compute_global_minmax_stats(self):
+        shard_meta = os.path.join(self.index_path, "shard.meta")
+        lock_shard_meta = filelock.FileLock(
+            os.path.join(self.index_path, "shard.meta") + ".lock"
+        )
+
+        with lock_shard_meta:
+            shard_meta = os.path.join(self.index_path, "shard.meta")
+            with open(shard_meta, "r") as f:
+                shard_data = json.load(f)
+
+            minmax_stats = DocMetadata.from_json(shard_data.get("metadata", {}))
+            for idx, data in enumerate(shard_data.values()):
+                if idx == 0:
+                    continue
+
+                minmax_stats.update(DocMetadata.from_json(data.get("metadata", {})))
+
+            return minmax_stats.to_json()
+
+    def _merge_docs(self, shard=-1, sub_shard=0, force_merge=False):
         """
         Merges the documents from the shards into a single file
         If `shard` is -1, then we merge all shards into a single file
@@ -687,6 +707,7 @@ class IndexMerger:
 
         docs_offset = OrderedDict()
         doc_stats = DocMetadata.default()
+        minmax_stat = self._compute_global_minmax_stats()
 
         lock_docs_file = filelock.FileLock(docs_file + ".lock")
         lock_offset_file = filelock.FileLock(offset_file + ".lock")
@@ -823,7 +844,6 @@ class IndexMerger:
                         self._merge_docs,
                         shard=shard,
                         force_merge=True,
-                        minmax_stat=final_doc_metadata,
                     )
                 )
 

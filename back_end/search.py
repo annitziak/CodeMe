@@ -2,18 +2,49 @@ import time
 import os
 import logging
 
+from dataclasses import dataclass
+from typing import Any
+
 from preprocessing.preprocessor import Preprocessor
 from indexor.index import Index
 from indexor.query import FreeTextQuery, BooleanQuery
 from retrieval_models.retrieval_functions import query_expansion
 from retrieval_models.query_expansion import EmbeddingModel
 from back_end.mock_search import MockSearch
+from back_end.reranker import Reranker
 
 logger = logging.getLogger(__name__)
 
+BOOSTED_TERMS = {
+    "python",
+    "java",
+    "c",
+    "javascript",
+    "typescript",
+    "rust",
+    "golang",
+    "swift",
+    "php",
+    "r",
+    "matlab",
+    "sql",
+    "nosql",
+    "html",
+    "css",
+    "ruby",
+    "array",
+    "list",
+    "tree",
+    "graph",
+    "heap",
+    "hashmap",
+    "queue",
+    "stack",
+}
+
 
 def load_backend(index_path):
-    if not os.path.exists(index_path):
+    if index_path is None or not os.path.exists(index_path):
         logger.error(f"Index path {index_path} does not exist. Using mock data")
         return Search.mock()
 
@@ -22,9 +53,9 @@ def load_backend(index_path):
     embedding_model = EmbeddingModel(
         vocab=index.get_vocab(), save_path="retrieval_models/data/embedding.pkl"
     )
-    # reranker = Reranker()
+    reranker = Reranker()
 
-    return Search(index, preprocessor, embedding_model)
+    return Search(index, preprocessor, embedding_model, reranker)
 
 
 def to_py(item):
@@ -34,41 +65,41 @@ def to_py(item):
     return item
 
 
+@dataclass
+class SearchResult:
+    results: list[dict[str, Any]]
+    time_taken: float
+    total_results: int
+    query: str
+
+    def __str__(self):
+        return f"Search Result(\n\tresults={self.results[:5]}\n\ttime_taken={self.time_taken}\n\ttotal_results={self.total_results}\n\tquery={self.query}\n)"
+
+
 class Search:
-    def __init__(self, index: Index, preprocessor: Preprocessor, embedding_model):
+    def __init__(
+        self,
+        index: Index,
+        preprocessor: Preprocessor,
+        embedding_model,
+        reranker: Reranker,
+    ):
         self.index = index
         self.embedding_model = embedding_model
+        self.reranker = reranker
 
         self.preprocessor = preprocessor
-        self.boosted_terms = {
-            "python",
-            "java",
-            "c",
-            "javascript",
-            "typescript",
-            "rust",
-            "golang",
-            "swift",
-            "php",
-            "r",
-            "matlab",
-            "sql",
-            "nosql",
-            "html",
-            "css",
-            "ruby",
-            "array",
-            "list",
-            "tree",
-            "graph",
-            "heap",
-            "hashmap",
-            "queue",
-            "stack",
-        }
+        boosted_terms = [
+            self.preprocessor.preprocess(term, return_words=True)
+            for term in BOOSTED_TERMS
+        ]
+        self.boosted_terms = {k[0] for k in boosted_terms if len(k) == 1}
+        logger.info(
+            f"Search Engine initialized with the following boosted terms: {self.boosted_terms}"
+        )
 
-    def search(self, query, expansion=False, boost_terms=True, k=10):
-        start = time.time()
+    def _pre_search(self, query, expansion=False, boost_terms=True, k=10):
+        logger.info(f"Preprocessing query: {query}")
         tokens = self.preprocessor.preprocess(query, return_words=True)
 
         if expansion and self.embedding_model:
@@ -76,14 +107,47 @@ class Search:
         if boost_terms:
             tokens.extend([token for token in tokens if token in self.boosted_terms])
 
+        query = self.preprocessor.preprocess(" ".join(tokens), return_words=True)
+
+        logger.info(f"Query after preprocessing: {query}")
+        return query
+
+    def _post_search(
+        self, results, query="", rerank_metadata=True, rerank_lm=True, k=10
+    ):
+        total_results = len(results)
+        return_result = SearchResult(
+            results=results, time_taken=0, total_results=total_results, query=query
+        )
+
+        results = results[:k]
+        return_result.results = self.format_results(results)
+
+        logger.info(f"Result from index after clipping: {return_result}")
+
+        if rerank_metadata:
+            return_result.results = self.reranker.rerank_metadata(return_result.results)
+            logger.info(f"Reranked with metadata: {return_result}")
+        if rerank_lm:
+            return_result.return_results = self.reranker.rerank_lm(
+                return_result.results, query
+            )
+            logger.info(f"Reranked with LM: {return_result}")
+
+        return return_result
+
+    def search(self, query, expansion=False, boost_terms=True, k=10) -> SearchResult:
+        start = time.time()
+
+        tokens = self._pre_search(query, expansion, boost_terms, k)
         query = FreeTextQuery(tokens)
         results = self.index.search(query)
+        ret = self._post_search(results, rerank_metadata=True, rerank_lm=True)
 
-        results = results[:k]  # Reranking here
-
-        ret = self.format_results(results)
-        end = time.time()
-        print(f"Search took {end-start} seconds to return {len(results)} results.")
+        ret.time_taken = time.time() - start
+        logger.info(
+            f"Search took {ret.time_taken} seconds to return {ret.total_results} results."
+        )
 
         return ret
 
@@ -97,14 +161,15 @@ class Search:
             tokens.extend([token for token in tokens if token in self.boosted_terms])
 
         # Encompasses BooleanQuery, PhraseQuery and ProximityQuery
+        tokens = self._pre_search(query, expansion, boost_terms, k)
         query = BooleanQuery(tokens)
         results = self.index.search(query)
+        ret = self._post_search(results)
 
-        results = results[:k]
-        ret = self.format_results(results)
-
-        end = time.time()
-        print(f"Search took {end-start} seconds to return {len(results)} results.")
+        ret.time_taken = time.time() - start
+        logger.info(
+            f"Search took {ret.time_taken} seconds to return {ret.total_results} results."
+        )
 
         return ret
 
@@ -123,6 +188,7 @@ class Search:
                     "answer_count": to_py(metadata["answercount"]),
                     "comment_count": to_py(metadata["commentcount"]),
                     "favorite_count": to_py(metadata["favoritecount"]),
+                    "metadata_score": to_py(metadata["metadatascore"]),
                     "title": "TO BE ADDED",
                     "body": "TO BE ADDED",
                 }
@@ -157,4 +223,4 @@ if __name__ == "__main__":
     while True:
         query = input("Enter query: ")
         results = search.search(query, expansion=False, boost_terms=True, k=10)
-        print(results[:10])
+        print(results)

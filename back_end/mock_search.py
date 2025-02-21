@@ -160,8 +160,8 @@ class MockSearch:
     def __init__(self):
         self.search_results = SEARCH_RESULTS
 
-    def search(self, query):
+    def search(self, query, *args, **kwargs):
         return random.choice(self.search_results)
 
-    def advanced_search(self, query):
+    def advanced_search(self, query, *args, **kwargs):
         return random.choice(self.search_results)

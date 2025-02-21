@@ -9,6 +9,7 @@ from collections import OrderedDict
 
 from indexor.index_builder.constants import SIZE_KEY
 from indexor.structures import DocMetadata, Term
+from indexor.metadata_score import metadata_score
 from utils.varint import encode
 
 logger = logging.getLogger(__name__)
@@ -274,6 +275,21 @@ class DocumentShardedIndexBuilder:
                             SIZE_KEY["doc_length"], doc_metadata.doc_length.get_value()
                         )
                     )
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_metadatascore"],
+                            metadata_score(
+                                score=doc_metadata.score.get_value(),
+                                viewcount=doc_metadata.viewcount.get_value(),
+                                creationdate=doc_metadata.creationdate.get_value(),
+                                reputationuser=doc_metadata.owneruserid.get_value(),
+                                answercount=doc_metadata.answercount.get_value(),
+                                commentcount=doc_metadata.commentcount.get_value(),
+                                favoritecount=doc_metadata.favoritecount.get_value(),
+                                minmax_dict={},
+                            ),
+                        )
+                    )  # metadata_score
                     f.write(
                         struct.pack(
                             SIZE_KEY["doc_score"], doc_metadata.score.get_value()

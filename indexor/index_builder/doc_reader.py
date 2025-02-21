@@ -2,6 +2,7 @@ import struct
 import logging
 
 from indexor.index_builder.constants import READ_SIZE_KEY, SIZE_KEY
+from indexor.metadata_score import metadata_score
 from indexor.structures import DocMetadata
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,11 @@ def read_doc(
                 SIZE_KEY["doc_length"],
                 sub_shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_length"]]),
             )[0]
+            # CUSTOM SCORE
+            _ = struct.unpack(
+                SIZE_KEY["doc_metadatascore"],
+                sub_shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_metadatascore"]]),
+            )[0]
             score = struct.unpack(
                 SIZE_KEY["doc_score"],
                 sub_shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_score"]]),
@@ -126,10 +132,18 @@ def read_doc(
         docs_offset[int(doc_id)] = shard_f.tell()
 
         shard_f.write(struct.pack(SIZE_KEY["doc_length"], doc_length))
+        doc_custom_score = 0
         if minmax_stat is not None:
-            doc_custom_score = 0
-            shard_f.write(struct.pack(SIZE_KEY["doc_score"], doc_custom_score))
-
+            doc_custom_score = metadata_score(
+                score=score,
+                viewcount=view_count,
+                creationdate=creation_date,
+                answercount=answer_count,
+                commentcount=comment_count,
+                favoritecount=favorite_count,
+                minmax_dict=minmax_stat,
+            )
+        shard_f.write(struct.pack(SIZE_KEY["doc_metadatascore"], doc_custom_score))
         shard_f.write(struct.pack(SIZE_KEY["doc_score"], score))
         shard_f.write(struct.pack(SIZE_KEY["doc_viewcount"], view_count))
         shard_f.write(struct.pack(SIZE_KEY["doc_owneruserid"], owneruserid))
