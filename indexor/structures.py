@@ -2,6 +2,7 @@ import bisect
 from collections import namedtuple
 import pprint
 import time
+import datetime
 import logging
 import numpy as np
 
@@ -17,22 +18,122 @@ PostingList = namedtuple("PostingList", ["doc_id", "doc_term_frequency", "positi
 
 
 @dataclass
+class Stat:
+    value: None | int = None
+    min: int = float("inf")
+    max: int = float("-inf")
+
+    def __post_init__(self):
+        if self.value and isinstance(self.value, int):
+            if not self.min:
+                self.min = self.value
+            if not self.max:
+                self.max = self.value
+
+            self.min = min(self.min, self.value)
+            self.max = max(self.max, self.value)
+
+    def update(self, new_value: "Stat | int", reset=False):
+        if reset:
+            self.value = None
+            self.min = float("inf")
+            self.max = float("-inf")
+
+        if self.value is None:
+            if isinstance(new_value, Stat):
+                self.value = new_value.value
+            else:
+                self.value = new_value
+        if self.min is None:
+            self.min = new_value
+        if self.max is None:
+            self.max = new_value
+
+        if isinstance(new_value, str) or new_value is None:
+            return
+
+        if isinstance(new_value, Stat):
+            if new_value.value is not None:
+                self.value = new_value.value
+            if new_value.min is not None:
+                self.min = min(new_value.min, self.min)
+            if new_value.max is not None:
+                self.max = max(new_value.max, self.max)
+            return
+
+        if new_value > -float("inf") and new_value < float("inf"):
+            self.min = min(self.min, new_value)
+            self.max = max(self.max, new_value)
+            self.value = new_value
+
+    def get_value(self):
+        if self.value is None:
+            return 0
+        if not isinstance(self.value, int):
+            return 0
+
+        return self.value
+
+
+@dataclass
 class DocMetadata:
-    creationdate: str
-    score: int
-    viewcount: int
-    owneruserid: int
+    creationdate: Stat
+    score: Stat
+    viewcount: Stat
+    owneruserid: Stat
     ownerdisplayname: str
     tags: str
-    answercount: int
-    commentcount: int
-    favoritecount: int
+    answercount: Stat
+    commentcount: Stat
+    favoritecount: Stat
 
-    doc_length: int = 0
+    doc_length: Stat = Stat(0)
 
     @staticmethod
     def default():
-        return DocMetadata("", 0, 0, 0, "", "", 0, 0, 0)
+        return DocMetadata(
+            Stat(), Stat(), Stat(), Stat(), "", "", Stat(), Stat(), Stat()
+        )
+
+    @staticmethod
+    def from_json(json_data):
+        def get_stat(json_data, key):
+            min_value = json_data.get(f"{key}_min", np.inf)
+            max_value = json_data.get(f"{key}_max", -1 * np.inf)
+            value = None
+
+            return Stat(value, min_value, max_value)
+
+        return DocMetadata(
+            get_stat(json_data, "creationdate"),
+            get_stat(json_data, "score"),
+            get_stat(json_data, "viewcount"),
+            get_stat(json_data, "owneruserid"),
+            json_data.get("ownerdisplayname", ""),
+            json_data.get("tags", ""),
+            get_stat(json_data, "answercount"),
+            get_stat(json_data, "commentcount"),
+            get_stat(json_data, "favoritecount"),
+            get_stat(json_data, "doc_length"),
+        )
+
+    def to_json(self):
+        def get_stat(stat, key):
+            return {
+                key: stat.value,
+                f"{key}_min": stat.min,
+                f"{key}_max": stat.max,
+            }
+
+        return {
+            **get_stat(self.creationdate, "creationdate"),
+            **get_stat(self.score, "score"),
+            **get_stat(self.viewcount, "viewcount"),
+            **get_stat(self.owneruserid, "owneruserid"),
+            **get_stat(self.answercount, "answercount"),
+            **get_stat(self.commentcount, "commentcount"),
+            **get_stat(self.favoritecount, "favoritecount"),
+        }
 
     def __post_init__(self):
         if not self.ownerdisplayname:
@@ -40,27 +141,87 @@ class DocMetadata:
         if not self.tags:
             self.tags = ""
         if not self.creationdate:
-            self.creationdate = ""
-        if not isinstance(self.creationdate, str):
-            self.creationdate = str(time.mktime(self.creationdate.timetuple()))
-        if not self.score:
-            self.score = 0
-        if not self.viewcount:
-            self.viewcount = 0
-        if not self.owneruserid:
-            self.owneruserid = 0
-        if not self.answercount:
-            self.answercount = 0
-        if not self.commentcount:
-            self.commentcount = 0
-        if not self.favoritecount:
-            self.favoritecount = 0
+            self.creationdate = Stat(0)
+        elif isinstance(self.creationdate, str):
+            self.creationdate = Stat(
+                int(
+                    time.mktime(
+                        datetime.datetime.strptime(
+                            self.creationdate, "%Y-%m-%dT%H:%M:%S.%f"
+                        ).timetuple()
+                    )
+                )
+            )
+        elif isinstance(self.creationdate, datetime.datetime):
+            self.creationdate = Stat(int(time.mktime(self.creationdate.timetuple())))
+        if not self.score or isinstance(self.score, int):
+            self.score = Stat(self.score)
+        if not self.viewcount or isinstance(self.viewcount, int):
+            self.viewcount = Stat(self.viewcount)
+        if not self.owneruserid or isinstance(self.owneruserid, int):
+            self.owneruserid = Stat(self.owneruserid)
+        if not self.answercount or isinstance(self.answercount, int):
+            self.answercount = Stat(self.answercount)
+        if not self.commentcount or isinstance(self.commentcount, int):
+            self.commentcount = Stat(self.commentcount)
+        if not self.favoritecount or isinstance(self.favoritecount, int):
+            self.favoritecount = Stat(self.favoritecount)
+        if not self.doc_length or isinstance(self.doc_length, int):
+            self.doc_length = Stat(self.doc_length)
 
-        self.owneruserid = max(0, self.owneruserid)
-        self.viewcount = max(0, self.viewcount)
-        self.answercount = max(0, self.answercount)
-        self.commentcount = max(0, self.commentcount)
-        self.favoritecount = max(0, self.favoritecount)
+        if self.owneruserid.value is not None:
+            self.owneruserid.value = max(0, self.owneruserid.value)
+        if self.score.value is not None:
+            self.score.value = max(0, self.score.value)
+        if self.viewcount.value is not None:
+            self.viewcount.value = max(0, self.viewcount.value)
+        if self.answercount.value is not None:
+            self.answercount.value = max(0, self.answercount.value)
+        if self.commentcount.value is not None:
+            self.commentcount.value = max(0, self.commentcount.value)
+        if self.favoritecount.value is not None:
+            self.favoritecount.value = max(0, self.favoritecount.value)
+
+    def __len__(self):
+        return 10
+
+    def update(self, other: "DocMetadata"):
+        self.creationdate.update(other.creationdate)
+        self.score.update(other.score)
+        self.viewcount.update(other.viewcount)
+        self.owneruserid.update(other.owneruserid)
+        self.answercount.update(other.answercount)
+        self.commentcount.update(other.commentcount)
+        self.favoritecount.update(other.favoritecount)
+        self.doc_length.update(other.doc_length)
+
+        return self
+
+    def update_with_raw(
+        self,
+        creationdate=None,
+        score=None,
+        viewcount=None,
+        owneruserid=None,
+        ownerdisplayname="",
+        tags="",
+        answercount=None,
+        commentcount=None,
+        favoritecount=None,
+        doc_length=None,
+    ):
+        self.creationdate.update(creationdate)
+        self.score.update(score)
+        self.viewcount.update(viewcount)
+        self.owneruserid.update(owneruserid)
+        self.ownerdisplayname = ownerdisplayname
+        self.tags = tags
+        self.answercount.update(answercount)
+        self.commentcount.update(commentcount)
+        self.favoritecount.update(favoritecount)
+        self.doc_length.update(doc_length)
+
+        return self
 
 
 @dataclass
@@ -189,7 +350,18 @@ class Term:
         if position_lists:
             # If position_lists are already numpy arrays, use direct assignment
             if isinstance(position_lists[0], np.ndarray):
-                np.concatenate(position_lists, out=concat)
+                try:
+                    np.concatenate(position_lists, out=concat)
+                except ValueError as e:
+                    print("Error concatenating arrays", e)
+                    print(position_lists[: -len(position_lists) - 10])
+                    print(len(position_lists))
+                    print(position_lists[0].shape)
+                    print(concat.shape)
+                    print(offsets.shape)
+                    print(offsets)
+                    print(lengths)
+                    raise ValueError()
             else:
                 # For lists, use efficient slicing
                 start = 0

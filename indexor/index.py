@@ -85,7 +85,6 @@ class Index(IndexBase):
 if __name__ == "__main__":
     import argparse
     import time
-    import os
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--index-path", type=str, required=True)
@@ -94,7 +93,7 @@ if __name__ == "__main__":
 
     index = Index(load_path=args.index_path)
     if args.write_index_to_txt:
-        index.write_index_to_txt(os.path.join(args.index_path, "index.txt"))
+        index.write_index_to_txt(args.index_path)
 
     """
     term_obj = index.get_term("!", positions=False)

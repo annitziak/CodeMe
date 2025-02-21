@@ -6,6 +6,7 @@ import struct
 import shutil
 import filelock
 import concurrent.futures
+from indexor.structures import DocMetadata
 import marisa_trie
 import json
 import datrie
@@ -256,10 +257,15 @@ class IndexMerger:
             save_filename="postings",
             force_merge=True,
         )
-        shard, min_doc_id, max_doc_id = self._merge_docs(force_merge=True)
+        shard, min_doc_id, max_doc_id, doc_stats = self._merge_docs(force_merge=True)
 
         if shard == -1:
             bounds = {shard: (min_doc_id, max_doc_id)}
+            bounds = {
+                k: {"bounds": v, "metadata": doc_stats.get(k, {})}
+                for k, v in bounds.items()
+                if v is not None
+            }
             doc_meta = os.path.join(self.index_path, "shard.temp.meta")
             lock_doc_meta = filelock.FileLock(doc_meta + ".lock")
             with lock_doc_meta:
@@ -333,7 +339,7 @@ class IndexMerger:
             return
 
         if len(shard_files) != len(offset_files):
-            return None, None, None
+            return None, None, None, None
 
         if len(base_shard_files) > 0 and len(base_offset_files) > 0:
             shard_files.insert(0, base_shard_files[0])
@@ -381,7 +387,7 @@ class IndexMerger:
                             self.index_path, f"{shard_filename}_{shard}.offset"
                         ),
                     )
-            return None, None, None
+            return None, None, None, None
 
         shard_files = sorted(shard_files, key=lambda x: extract_shard(x))
         position_files = sorted(position_files, key=lambda x: extract_shard(x))
@@ -474,8 +480,10 @@ class IndexMerger:
                         else:
                             heap_item.reader.close()
         except Exception as e:
-            logger.error(f"Error merging {shard_files} {e}")
+            import traceback
 
+            logger.error(f"Error merging {shard_files} {e}")
+            logger.error(traceback.format_exc())
 
         logger.debug(f"Unlocked {postings_file}")
         shutil.move(postings_file, postings_file.replace(".temp", ""))
@@ -503,7 +511,7 @@ class IndexMerger:
 
         logger.info(f"Merged {shard_filename} {shard} to {postings_file}")
 
-        return None, None, None
+        return None, None, None, None
 
     def _remove_sub_shard_files(self, shard_files, base_shard_files, shard=-1):
         for shard_file in shard_files:
@@ -606,7 +614,7 @@ class IndexMerger:
             f.write(struct.pack(SIZE_KEY["offset"], pos_offset))
 
     def _write_merged_postings(self, f, postings=[], positions_file=None):
-        f.write(struct.pack(SIZE_KEY["postings_count"], len(postings)))
+        f.write(encode(len(postings)))
         prev_doc_id = 0
         for posting in postings:
             delta = posting.doc_id - prev_doc_id
@@ -625,11 +633,13 @@ class IndexMerger:
                     positions_file.write(encode(delta))
                     prev_position = position
 
-    def _merge_docs(self, shard=-1, sub_shard=0, force_merge=False):
+    def _merge_docs(self, shard=-1, sub_shard=0, force_merge=False, minmax_stat=None):
         """
         Merges the documents from the shards into a single file
         If `shard` is -1, then we merge all shards into a single file
         If `shard` is not -1, then we merge the sub-shards into a single file
+
+        If minmax_stat is not empty than we assume it is the FINAL merge and we save the score
 
         We read the document from each shard and write to the output file
         """
@@ -676,6 +686,7 @@ class IndexMerger:
         )
 
         docs_offset = OrderedDict()
+        doc_stats = DocMetadata.default()
 
         lock_docs_file = filelock.FileLock(docs_file + ".lock")
         lock_offset_file = filelock.FileLock(offset_file + ".lock")
@@ -702,13 +713,16 @@ class IndexMerger:
                         open(shard_file, "rb") as shard_f,
                         open(offset_filename, "rb") as roffset_f,
                     ):
+                        roffset_f.seek(0)
                         shard_f.seek(0)
-                        docs_offset = read_doc(
+                        docs_offset, doc_stats = read_doc(
                             docs_f,
                             offset_f,
                             shard_f,
                             roffset_f,
                             docs_offset=docs_offset,
+                            docs_metadata=doc_stats,
+                            minmax_stat=minmax_stat,
                         )
 
                 offset_f.seek(0)
@@ -734,7 +748,12 @@ class IndexMerger:
 
         logger.info(f"Merged doc_shard {shard} to {docs_file}")
 
-        return shard if min_doc_id is not None else None, min_doc_id, max_doc_id
+        return (
+            shard if min_doc_id is not None else None,
+            min_doc_id,
+            max_doc_id,
+            doc_stats,
+        )
 
     def merge_shards_to_size(self, shards=25, shard_size=1000):
         """
@@ -800,16 +819,26 @@ class IndexMerger:
                     executor.submit(self._merge, shard=shard, force_merge=True)
                 )
                 futures.append(
-                    executor.submit(self._merge_docs, shard=shard, force_merge=True)
+                    executor.submit(
+                        self._merge_docs,
+                        shard=shard,
+                        force_merge=True,
+                        minmax_stat=final_doc_metadata,
+                    )
                 )
 
         bounds = {}
+        doc_stats = {}
         for future in concurrent.futures.as_completed(futures):
-            shard, low_doc_id, high_doc_id = future.result()
+            shard, low_doc_id, high_doc_id, doc_metadata = future.result()
             if shard is None:
                 continue
 
             bounds[shard] = (low_doc_id, high_doc_id)
+
+            if shard not in doc_stats:
+                doc_stats[shard] = DocMetadata.default()
+            doc_stats[shard].update(doc_metadata)
 
         logger.info("Merged all shards")
         self.post_merge_cleanup()
@@ -817,8 +846,12 @@ class IndexMerger:
         doc_meta = os.path.join(self.index_path, "shard.temp.meta")
         lock_doc_meta = filelock.FileLock(doc_meta + ".lock")
         with lock_doc_meta:
+            shard_data = {
+                k: {"bounds": v, "metadata": doc_stats[k].to_json()}
+                for k, v in bounds.items()
+            }
             with open(doc_meta, "w") as f:
-                json.dump(bounds, f)
+                json.dump(shard_data, f)
         logger.info(f"Saved document bounds {bounds} to {doc_meta}")
 
         shutil.move(doc_meta, doc_meta.replace(".temp", ""))

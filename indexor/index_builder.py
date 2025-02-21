@@ -8,7 +8,7 @@ from filelock import FileLock
 
 from indexor.index_builder.index_builder import DocumentShardedIndexBuilder
 from indexor.index_builder.index_merger import IndexMerger
-from indexor.structures import DocMetadata
+from indexor.structures import DocMetadata, Stat
 
 from preprocessing.preprocessor import Preprocessor
 from preprocessing.tokenizer import BuildTokenizer
@@ -307,8 +307,9 @@ class IndexBuilder:
             postition_offset: int
         """
         for row in rows:
-            post_id, title, body, *raw_doc_metadata = row
-            doc_metadata = DocMetadata(*raw_doc_metadata)
+            post_id, title, body, *raw_metadata = row
+            doc_metadata = DocMetadata(*raw_metadata)
+            doc_metadata.doc_length = Stat(0)
 
             doc_terms = {}
             position_offset = 0
@@ -335,7 +336,7 @@ class IndexBuilder:
 
                     position_offset += block.block_length
 
-            doc_metadata.doc_length = position_offset
+            doc_metadata.doc_length.update(position_offset, reset=True)
             yield post_id, doc_terms, doc_metadata
 
     def _tokenize(self, text: str, field: str = "body"):
@@ -522,3 +523,4 @@ if __name__ == "__main__":
     print(index.get_term("javascript", positions=True))
 
     print(index.get_document_length(26602868))
+    print("HI")

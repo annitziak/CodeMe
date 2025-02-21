@@ -14,7 +14,6 @@ from utils.varint import encode
 logger = logging.getLogger(__name__)
 
 
-# Notes losing something when setting shard size to 500
 class DocumentShardedIndexBuilder:
     def __init__(self, index_path: str, shard: int = -1, shard_size: int = 50_000):
         """
@@ -55,6 +54,7 @@ class DocumentShardedIndexBuilder:
         self.shard_size = shard_size
         self.term_map: dict[str, Term] = {}
         self.doc_map: dict[int, DocMetadata] = {}
+        self.doc_stats_map: DocMetadata = DocMetadata.default()
 
         self.current_docs = 0
         self.doc_count = 0
@@ -123,130 +123,6 @@ class DocumentShardedIndexBuilder:
         self.min_doc_id = float("inf")
         self.max_doc_id = float("-inf")
         self.start = time.time()
-
-    def _flush_doc_map(self, shard: int = -1, sub_shard: int = 0):
-        """
-        Flush the document map to disk.
-        Saves the document map to a file in the index directory.
-
-        When the shard is set as part of the class (i.e. where the index is not sharded),
-            then the shard is set to the current shard
-        When the shard is not set, then the shard is set to the class shard (e.g. shard_0)
-            and sub_shard is set to the current shard based on the number of documents processed
-        """
-        shard = self.curr_shard if shard == -1 else self.shard
-
-        shard_str = str(shard)
-        shard_str = f"{shard}_{sub_shard}"
-
-        doc_map_path = os.path.join(self.index_path, f"doc_shard_{shard_str}.index")
-        doc_offset = os.path.join(self.index_path, f"doc_shard_{shard_str}.offset")
-
-        logger.info(
-            f"Flushing doc map for shard {shard_str} with {len(self.doc_map)} documents to {doc_map_path}. Documents processed: {self.current_docs} in {time.time()-self.start}. Min doc ID: {self.min_doc_id}. Max doc ID: {self.max_doc_id}"
-        )
-
-        doc_offset_dict = OrderedDict()
-
-        lock_flush_file = filelock.FileLock(doc_map_path + ".lock")
-        lock_offset_file = filelock.FileLock(doc_offset + ".lock")
-        logger.debug(f"Locking {doc_map_path}")
-        with lock_flush_file, lock_offset_file:
-            sum_doc_length = 0
-            with open(doc_map_path, "wb") as f:
-                for doc_id, doc_metadata in self.doc_map.items():
-                    doc_offset_dict[doc_id] = f.tell()
-                    sum_doc_length += doc_metadata.doc_length
-                    f.write(
-                        struct.pack(SIZE_KEY["doc_length"], doc_metadata.doc_length)
-                    )
-                    f.write(struct.pack(SIZE_KEY["doc_score"], doc_metadata.score))
-                    f.write(
-                        struct.pack(SIZE_KEY["doc_viewcount"], doc_metadata.viewcount)
-                    )
-                    f.write(
-                        struct.pack(
-                            SIZE_KEY["doc_owneruserid"], doc_metadata.owneruserid
-                        )
-                    )
-                    f.write(
-                        struct.pack(
-                            SIZE_KEY["doc_answercount"], doc_metadata.answercount
-                        )
-                    )
-                    f.write(
-                        struct.pack(
-                            SIZE_KEY["doc_commentcount"], doc_metadata.commentcount
-                        )
-                    )
-                    f.write(
-                        struct.pack(
-                            SIZE_KEY["doc_favoritecount"], doc_metadata.favoritecount
-                        )
-                    )
-                    raw_bytes_display_name = doc_metadata.ownerdisplayname.encode(
-                        "utf-8"
-                    )
-                    display_name_size = len(raw_bytes_display_name)
-                    f.write(
-                        struct.pack(SIZE_KEY["doc_ownerdisplayname"], display_name_size)
-                    )
-                    f.write(raw_bytes_display_name)
-
-                    raw_bytes_tags = doc_metadata.tags.encode("utf-8")
-                    tags_size = len(raw_bytes_tags)
-                    f.write(struct.pack(SIZE_KEY["doc_tags"], tags_size))
-                    f.write(raw_bytes_tags)
-
-                    raw_creationdate = doc_metadata.creationdate.encode("utf-8")
-                    creationdate_size = len(raw_creationdate)
-                    f.write(
-                        struct.pack(SIZE_KEY["doc_creationdate"], creationdate_size)
-                    )
-                    f.write(raw_creationdate)
-
-            with open(doc_offset, "wb") as f:
-                f.write(struct.pack(SIZE_KEY["doc_count"], len(doc_offset_dict)))
-                f.write(struct.pack(SIZE_KEY["offset"], sum_doc_length))
-                for doc_id, offset in doc_offset_dict.items():
-                    f.write(struct.pack(SIZE_KEY["doc_id"], doc_id))
-                    f.write(struct.pack(SIZE_KEY["offset"], offset))
-
-        doc_meta = os.path.join(self.index_path, "shard.meta")
-        lock_doc_meta_file = filelock.FileLock(doc_meta + ".lock")
-        logger.debug(f"Locking {doc_meta}")
-        with lock_doc_meta_file:
-            if not os.path.exists(doc_meta):
-                shard_bounds = {}
-            else:
-                try:
-                    with open(doc_meta) as f:
-                        shard_bounds = json.load(f)
-                except json.JSONDecodeError:
-                    shard_bounds = {}
-                    logger.error(f"Error reading {doc_meta}")
-
-            curr_min_doc_id = shard_bounds.get(
-                str(shard), [float("inf"), float("-inf")]
-            )[0]
-            curr_max_doc_id = shard_bounds.get(
-                str(shard), [float("inf"), float("-inf")]
-            )[1]
-
-            shard_bounds[str(shard)] = [
-                min(curr_min_doc_id, self.min_doc_id),
-                max(curr_max_doc_id, self.max_doc_id),
-            ]
-
-            with open(doc_meta, "w") as f:
-                json.dump(shard_bounds, f)
-
-            logger.info(f"Written {shard_bounds} to {doc_meta}")
-
-        logger.debug(f"Unlocked {doc_meta}")
-        logger.info(
-            f"Flushed doc map for shard {shard_str} with {len(self.doc_map)} documents to {doc_map_path}"
-        )
 
     def _flush_shard(
         self,
@@ -359,3 +235,156 @@ class DocumentShardedIndexBuilder:
                     offset_f.write(struct.pack(SIZE_KEY["offset"], position_offset))
 
         logger.debug(f"Unlocked {offset_path}")
+
+    def _flush_doc_map(self, shard: int = -1, sub_shard: int = 0):
+        """
+        Flush the document map to disk.
+        Saves the document map to a file in the index directory.
+
+        When the shard is set as part of the class (i.e. where the index is not sharded),
+            then the shard is set to the current shard
+        When the shard is not set, then the shard is set to the class shard (e.g. shard_0)
+            and sub_shard is set to the current shard based on the number of documents processed
+        """
+        shard = self.curr_shard if shard == -1 else self.shard
+
+        shard_str = str(shard)
+        shard_str = f"{shard}_{sub_shard}"
+
+        doc_map_path = os.path.join(self.index_path, f"doc_shard_{shard_str}.index")
+        doc_offset = os.path.join(self.index_path, f"doc_shard_{shard_str}.offset")
+
+        logger.info(
+            f"Flushing doc map for shard {shard_str} with {len(self.doc_map)} documents to {doc_map_path}. Documents processed: {self.current_docs} in {time.time()-self.start}. Min doc ID: {self.min_doc_id}. Max doc ID: {self.max_doc_id}"
+        )
+
+        doc_offset_dict = OrderedDict()
+
+        lock_flush_file = filelock.FileLock(doc_map_path + ".lock")
+        lock_offset_file = filelock.FileLock(doc_offset + ".lock")
+        logger.debug(f"Locking {doc_map_path}")
+        with lock_flush_file, lock_offset_file:
+            sum_doc_length = 0
+            with open(doc_map_path, "wb") as f:
+                for doc_id, doc_metadata in self.doc_map.items():
+                    doc_offset_dict[doc_id] = f.tell()
+                    sum_doc_length += doc_metadata.doc_length.get_value()
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_length"], doc_metadata.doc_length.get_value()
+                        )
+                    )
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_score"], doc_metadata.score.get_value()
+                        )
+                    )
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_viewcount"],
+                            doc_metadata.viewcount.get_value(),
+                        )
+                    )
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_owneruserid"],
+                            doc_metadata.owneruserid.get_value(),
+                        )
+                    )
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_answercount"],
+                            doc_metadata.answercount.get_value(),
+                        )
+                    )
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_commentcount"],
+                            doc_metadata.commentcount.get_value(),
+                        )
+                    )
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_favoritecount"],
+                            doc_metadata.favoritecount.get_value(),
+                        )
+                    )
+                    raw_bytes_display_name = doc_metadata.ownerdisplayname.encode(
+                        "utf-8"
+                    )
+                    display_name_size = len(raw_bytes_display_name)
+                    f.write(
+                        struct.pack(SIZE_KEY["doc_ownerdisplayname"], display_name_size)
+                    )
+                    f.write(raw_bytes_display_name)
+
+                    raw_bytes_tags = doc_metadata.tags.encode("utf-8")
+                    tags_size = len(raw_bytes_tags)
+                    f.write(struct.pack(SIZE_KEY["doc_tags"], tags_size))
+                    f.write(raw_bytes_tags)
+
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_creationdate"],
+                            doc_metadata.creationdate.get_value(),
+                        )
+                    )
+
+                    self.doc_stats_map = self._update_doc_stats_map(
+                        doc_metadata=doc_metadata
+                    )
+
+            with open(doc_offset, "wb") as f:
+                f.write(struct.pack(SIZE_KEY["doc_count"], len(doc_offset_dict)))
+                f.write(struct.pack(SIZE_KEY["offset"], sum_doc_length))
+                for doc_id, offset in doc_offset_dict.items():
+                    f.write(struct.pack(SIZE_KEY["doc_id"], doc_id))
+                    f.write(struct.pack(SIZE_KEY["offset"], offset))
+
+        doc_meta = os.path.join(self.index_path, "shard.meta")
+        lock_doc_meta_file = filelock.FileLock(doc_meta + ".lock")
+        logger.debug(f"Locking {doc_meta}")
+        with lock_doc_meta_file:
+            if not os.path.exists(doc_meta):
+                shard_bounds = {}
+            else:
+                try:
+                    with open(doc_meta) as f:
+                        shard_bounds = json.load(f)
+                except json.JSONDecodeError:
+                    shard_bounds = {}
+                    logger.error(f"Error reading {doc_meta}")
+
+            doc_bounds = shard_bounds.get(str(shard), {}).get(
+                "bounds", [float("inf"), float("-inf")]
+            )
+            curr_min_doc_id, curr_max_doc_id = doc_bounds
+
+            doc_metadata = DocMetadata.from_json(
+                shard_bounds.get(str(shard), {}).get("metadata", {})
+            )
+            doc_metadata = doc_metadata.update(self.doc_stats_map)
+
+            shard_bounds[str(shard)] = {
+                "bounds": [
+                    min(curr_min_doc_id, self.min_doc_id),
+                    max(curr_max_doc_id, self.max_doc_id),
+                ],
+                "metadata": doc_metadata.to_json(),
+            }
+
+            with open(doc_meta, "w") as f:
+                json.dump(shard_bounds, f)
+
+            logger.info(f"Written {shard_bounds} to {doc_meta}")
+
+        logger.debug(f"Unlocked {doc_meta}")
+        logger.info(
+            f"Flushed doc map for shard {shard_str} with {len(self.doc_map)} documents to {doc_map_path}"
+        )
+
+    def _update_doc_stats_map(self, doc_metadata: DocMetadata):
+        """
+        Update the document stats map with the document metadata.
+        """
+        return self.doc_stats_map.update(doc_metadata)

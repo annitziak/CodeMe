@@ -136,7 +136,10 @@ class MMappedFile:
 
     def load(self):
         with open(self.path, "rb") as f:
-            self.data = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            try:
+                self.data = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            except Exception as e:
+                logger.error(f"Error loading mmap: {e}")
 
         return self
 
@@ -257,10 +260,14 @@ class MMappedReader:
 
 
 def _load_doc_id_bounds(load_path: str = ""):
+    doc_id_bounds, doc_stats = {}, {}
     with open(os.path.join(load_path, "shard.meta"), "r") as f:
-        doc_id_bounds = json.load(f)
+        shard_meta = json.load(f)
+        for shard, item in shard_meta.items():
+            doc_id_bounds[shard] = item.get("bounds", {})
+            doc_stats[shard] = item.get("metadata", {})
 
-    return doc_id_bounds
+    return doc_id_bounds, doc_stats
 
 
 class TermCache:
@@ -342,7 +349,7 @@ class ShardWorker:
         ]
 
         self.doc_length_cache = DocLengthCache()
-        self.doc_bounds = _load_doc_id_bounds(self.index_path)
+        self.doc_bounds, self.doc_stats = _load_doc_id_bounds(self.index_path)
         self.doc_count = 0
         self.avg_doc_length = 0
 
@@ -359,6 +366,10 @@ class ShardWorker:
         self.shard = shard
 
         self.doc_count, sum_doc_length = self._get_document_count()
+        if self.doc_count == 0:
+            logger.error(f"Doc count is 0 in shard {shard}")
+            return
+
         self.avg_doc_length = sum_doc_length / self.doc_count
 
         for doc_id, value in self.doc_fst.items():
@@ -395,16 +406,21 @@ class ShardWorker:
                 offset = _offset
                 pos_offset = _pos_offset
 
+        if offset == -1 or pos_offset == -1:
+            return (
+                shard,
+                np.array([], dtype=np.uint32),
+                np.array([], dtype=np.uint32),
+                [],
+            )
+
         posting_mmap = self.postings_mmaps.load(shard)[shard]
         posting_mmap.seek(offset)
 
         position_mmap = self.positions_mmaps.load(shard)[shard]
         position_mmap.seek(pos_offset)
 
-        postings_count = struct.unpack(
-            SIZE_KEY["postings_count"],
-            posting_mmap.read(READ_SIZE_KEY[SIZE_KEY["postings_count"]]),
-        )[0]
+        postings_count = decode_bytes(posting_mmap)
 
         doc_ids = []
         term_frequencies = []
@@ -742,7 +758,7 @@ class ShardWorker:
 
         ret = {}
         for key in keys:
-            if key in ["ownerdisplayname", "tags", "creationdate"]:
+            if key in ["ownerdisplayname", "tags"]:
                 size = struct.unpack(
                     SIZE_KEY[f"doc_{key}"],
                     mmap.read(READ_SIZE_KEY[SIZE_KEY[f"doc_{key}"]]),
@@ -854,7 +870,7 @@ class OnDiskIndex(IndexBase):
         self.num_workers = min(
             index_builder_kwargs.get("num_workers", 24), os.cpu_count() - 1
         )
-        self.doc_bounds = _load_doc_id_bounds(self.load_path)
+        self.doc_bounds, self.doc_stats = _load_doc_id_bounds(self.load_path)
         self.term_cache = TermCache()
 
         self.num_shards = len(self.doc_bounds)
@@ -1114,16 +1130,15 @@ class OnDiskIndex(IndexBase):
         return docs
 
     def get_document_count(self):
-        return self.worker_pool[0].submit(worker_get_document_count).result()
+        return self.worker_pool[0].submit(worker_get_document_count).result()[0]
 
     def get_term_count(self):
         return len(self.term_fst)
 
     def write_index_to_txt(self, path: str):
         logger.info(f"Writing index to {path}")
-        if not os.path.exists(os.path.dirname(path)):
-            logger.info(f"Creating directory {os.path.dirname(path)}")
-            os.makedirs(os.path.dirname(path))
+
+        doc_meta_path = os.path.join(path, "doc_metadata.txt")
 
         index_path = os.path.join(path, "index.txt")
         with open(index_path, "w") as f:
@@ -1141,7 +1156,6 @@ class OnDiskIndex(IndexBase):
 
         logger.info(f"Index written to {index_path}")
 
-        doc_meta_path = os.path.join(path, "doc_metadata.txt")
         sorted_doc_ids = sorted([int(x) for x in self.doc_fst.keys()])
         with open(doc_meta_path, "w") as f:
             tags = [
@@ -1155,7 +1169,7 @@ class OnDiskIndex(IndexBase):
                 "ownerdisplayname",
                 "tags",
             ]
-            f.write(f'doc_id,{",".join(tags)}')
+            f.write(f'doc_id,{",".join(tags)}\n')
             for doc_id in sorted_doc_ids:
                 if isinstance(doc_id, bytes):
                     doc_id = doc_id.decode("utf-8")
@@ -1166,6 +1180,9 @@ class OnDiskIndex(IndexBase):
                 f.write(f"{doc_id},{out}\n")
 
         logger.info(f"Document metadata written to {doc_meta_path}")
+        if not os.path.exists(os.path.dirname(path)):
+            logger.info(f"Creating directory {os.path.dirname(path)}")
+            os.makedirs(os.path.dirname(path))
 
         doc_terms = os.path.join(path, "document_terms.txt")
         docs = self.get_all_documents()

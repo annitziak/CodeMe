@@ -1,7 +1,36 @@
 from flask import Flask, request, jsonify
+from back_end.search import load_backend
 from retrieval_models.retrieval_functions import *
 
 app = Flask(__name__)
+search_module = load_backend(".cache/index-10k-metadata2")
+
+IDX_TO_ITEM = {
+    0: "doc_id",
+    1: "score",
+    2: "view_count",
+    3: "owneruserid",
+    4: "answer_count",
+    5: "comment_count",
+    6: "favorite_count",
+    7: "ownerdisplayname",
+    8: "tags",
+    9: "creation_date",
+    10: "snippet",
+    11: "title",
+    "doc_id": 0,
+    "score": 1,
+    "view_count": 2,
+    "owneruserid": 3,
+    "answer_count": 4,
+    "comment_count": 5,
+    "favorite_count": 6,
+    "ownerdisplayname": 7,
+    "tags": 8,
+    "creation_date": 9,
+    "snippet": 10,
+    "title": 11,
+}
 
 
 @app.route("/search", methods=["GET"])
@@ -12,7 +41,7 @@ def search():
         page: int
         page_size: int
         # BELOW IS TENTATIVE TO SUPPORT HERE
-        filters: dict[ 
+        filters: dict[
             from_date: str
             to_date: str
             tags: list[str]
@@ -22,20 +51,27 @@ def search():
             boost_terms: bool
         ]
     Structure of the response:
-        results: list[dict[
-            doc_id: int
-            score: float
-            view_count: int
-            owneruserid: int
-            answer_count: int
-            comment_count: int
-            favorite_count: int
-            ownerdisplayname: str
-            tags: str
-            creation_date: str
-            snippet: str ??? unsupported
-            title: str ??? unsupported
-        ]]
+        results: list[
+            dict[
+                doc_id: int
+                score: float
+                view_count: int
+                owneruserid: int
+                answer_count: int
+                comment_count: int
+                favorite_count: int
+                ownerdisplayname: str
+                tags: str
+                creation_date: str
+                body: str ??? unsupported (ONLY A SNIPPET)
+                title: str ??? unsupported
+            ]
+        ]
+        page: int
+        page_size: int
+        total_results: int # Total number from the search (not on the page)
+        has_next: bool
+        has_prev: bool
 
     Error Codes:
         200: OK
@@ -44,20 +80,37 @@ def search():
     """
     query = request.form.get("query")  # Extract query
     filters = request.form.getlist("filters")  # Extract multiple filter values
+    page = request.form.get("page", 0)  # Extract page number
+    page_size = request.form.get("page_size", 20)  # Extract page size
 
-    result = reorder_as_per_filter(query, filters)  # Apply filters
+    result = search_module.search(query)
+    result = reorder_as_per_filter(result, filters)  # Apply filters
 
-    return jsonify({"result": result}), 200
+    has_next = False
+    has_prev = False
+    total_results = len(result)
+
+    return jsonify(
+        {
+            "result": result,
+            "page": page,
+            "page_size": page_size,
+            "has_next": has_next,
+            "has_prev": has_prev,
+            "total_results": total_results,
+        }
+    ), 200
+
 
 @app.route("/advanced_search", methods=["GET"])
-def search():
+def advanced_search():
     """
     Structure of the request:
         query: str
         page: int
         page_size: int
         # BELOW IS TENTATIVE TO SUPPORT HERE
-        filters: dict[ 
+        filters: dict[
             from_date: str
             to_date: str
             tags: list[str]
@@ -67,20 +120,22 @@ def search():
             boost_terms: bool
         ]
     Structure of the response:
-        results: list[dict[
-            doc_id: int
-            score: float
-            view_count: int
-            owneruserid: int
-            answer_count: int
-            comment_count: int
-            favorite_count: int
-            ownerdisplayname: str
-            tags: str
-            creation_date: str
-            snippet: str ??? unsupported
-            title: str ??? unsupported
-        ]]
+        results: list[
+            dict[
+                doc_id: int,
+                score: float
+                view_count: int
+                owneruserid: int
+                answer_count: int
+                comment_count: int
+                favorite_count: int
+                ownerdisplayname: str
+                tags: str
+                creation_date: str
+                body: str ??? unsupported (ONLY A SNIPPET)
+                title: str ??? unsupported
+            ]
+        ]
 
     Error Codes:
         200: OK
@@ -89,25 +144,52 @@ def search():
     """
     query = request.form.get("query")  # Extract query
     filters = request.form.getlist("filters")  # Extract multiple filter values
+    page = request.form.get("page", 0)  # Extract page number
+    page_size = request.form.get("page_size", 20)  # Extract page size
 
-    result = reorder_as_per_filter(query, filters)  # Apply filters
+    result = search_module.advanced_search(query)
+    result = reorder_as_per_filter(result, filters)
 
-    return jsonify({"result": result}), 200
+    has_next = False
+    has_prev = False
+    total_results = len(result)
+
+    return jsonify(
+        {
+            "result": result,
+            "page": page,
+            "page_size": page_size,
+            "has_next": has_next,
+            "has_prev": has_prev,
+            "total_results": total_results,
+        }
+    ), 200
+
+
+def format_result(result):
+    new_result = []
+    for doc_result in result:
+        new_result.append({})
+        for idx, value in enumerate(doc_result):
+            if hasattr(value, "item"):
+                value = value.item()
+            new_result[-1][IDX_TO_ITEM[idx]] = value
+
+    return new_result
+
 
 def retreival_function(query):
     return ["doc1", "doc2", "doc3"]
 
 
-def reorder_as_per_filter(query, filters):
-    doc_list = retreival_function(query)  # Retrieve documents
-
+def reorder_as_per_filter(result, filters):
     if "date" in filters:
-        doc_list = reorder_as_date(doc_list)  # Reorder by date
+        result = reorder_as_date(result)  # Reorder by date
 
     if "tag" in filters:
-        doc_list = reorder_as_tag(doc_list)  # Reorder by tag
+        result = reorder_as_tag(result)  # Reorder by tag
 
-    return doc_list  # Return reordered results
+    return result  # Return reordered results
 
 
 @app.route("/Queryresponse/<result>")

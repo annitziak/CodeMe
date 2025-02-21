@@ -1,8 +1,8 @@
 \set ON_ERROR_STOP on
 
-DROP TABLE IF EXISTS temp_posts;
-DROP TABLE IF EXISTS temp_users;
-DROP TABLE IF EXISTS temp_posthistory;
+DROP TABLE IF EXISTS temp_posts CASCADE;
+DROP TABLE IF EXISTS temp_users CASCADE;
+DROP TABLE IF EXISTS temp_posthistory CASCADE;
 DROP TABLE IF EXISTS temp_comments;
 DROP TABLE IF EXISTS temp_votes;
 DROP TABLE IF EXISTS temp_postlinks;
