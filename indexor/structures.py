@@ -87,7 +87,8 @@ class DocMetadata:
     commentcount: Stat
     favoritecount: Stat
 
-    doc_length: Stat = Stat(0)
+    # doc_length: Stat = Stat(0)
+    doc_length: Stat = field(default_factory=lambda: Stat(0))
 
     @staticmethod
     def default():
