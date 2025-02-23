@@ -232,7 +232,7 @@ class MMappedReader:
                 logger.debug(f"Loading {file} into mmap")
                 self.files[shard_no] = MMappedFile(file).load()
 
-            logger.debug(f"{os.getpid()} Loaded {file} in {self.files}")
+            logger.info(f"{os.getpid()} Loaded {file} in {self.files}")
 
         return self
 
@@ -868,11 +868,11 @@ class OnDiskIndex(IndexBase):
 
         self.term_fst = self._load_fst(os.path.join(self.load_path, "terms.fst"))
         self.doc_fst = self._load_fst(os.path.join(self.load_path, "docs.fst"))
-        self.doc_set = set(self.doc_fst.keys())  # enough mem??
+        # self.doc_set = set(self.doc_fst.keys())  # enough mem??
         # self.doc_set = set()
 
         self.num_workers = min(
-            index_builder_kwargs.get("num_workers", 24), os.cpu_count() - 1
+            index_builder_kwargs.get("num_workers", 4), os.cpu_count() - 1
         )
         self.doc_bounds, self.doc_stats = _load_doc_id_bounds(self.load_path)
         self.term_cache = TermCache()

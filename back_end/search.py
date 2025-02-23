@@ -129,7 +129,7 @@ class Search:
             return_result.results = self.reranker.rerank_metadata(return_result.results)
             logger.info(f"Reranked with metadata: {return_result}")
         if rerank_lm:
-            return_result.return_results = self.reranker.rerank_lm(
+            return_result.results = self.reranker.rerank_lm(
                 return_result.results, query
             )
             logger.info(f"Reranked with LM: {return_result}")
