@@ -291,7 +291,7 @@ class DocLengthCache:
     def __init__(self):
         self.cache = {}
 
-        self.max_size = 10_000_000
+        self.max_size = 1_000_000
 
     def get(self, doc_id: int):
         return self.cache.get(doc_id, None)
@@ -299,6 +299,7 @@ class DocLengthCache:
     def put(self, doc_id: int, doc_length: int):
         if len(self.cache) > self.max_size:
             self.cache.popitem(last=False)
+
         self.cache[doc_id] = doc_length
 
 

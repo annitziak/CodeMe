@@ -2,14 +2,14 @@ import time
 import os
 import logging
 
-from dataclasses import dataclass
-from typing import Any
 
 from preprocessing.preprocessor import Preprocessor
 from indexor.index import Index
 from indexor.query import FreeTextQuery, BooleanQuery
 from retrieval_models.retrieval_functions import query_expansion
 from retrieval_models.query_expansion import EmbeddingModel
+
+from back_end.modeling_outputs import SearchResult
 from back_end.mock_search import MockSearch
 from back_end.reranker import Reranker
 
@@ -63,17 +63,6 @@ def to_py(item):
         return item.item()
 
     return item
-
-
-@dataclass
-class SearchResult:
-    results: list[dict[str, Any]]
-    time_taken: float
-    total_results: int
-    query: str
-
-    def __str__(self):
-        return f"Search Result(\n\tresults={self.results[:5]}\n\ttime_taken={self.time_taken}\n\ttotal_results={self.total_results}\n\tquery={self.query}\n)"
 
 
 class Search:

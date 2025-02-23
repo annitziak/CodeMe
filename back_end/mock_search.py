@@ -1,4 +1,7 @@
 import random
+import time
+
+from back_end.modeling_outputs import SearchResult
 
 SEARCH_RESULTS = [
     """{
@@ -161,7 +164,16 @@ class MockSearch:
         self.search_results = SEARCH_RESULTS
 
     def search(self, query, *args, **kwargs):
-        return random.choice(self.search_results)
+        start = time.time()
+        result = random.choice(self.search_results)
+        end = time.time()
+
+        return SearchResult(
+            results=result,
+            time_taken=end - start,
+            total_results=len(result),
+            query=query,
+        )
 
     def advanced_search(self, query, *args, **kwargs):
-        return random.choice(self.search_results)
+        return self.search(query, *args, **kwargs)
