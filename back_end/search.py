@@ -111,6 +111,7 @@ class Search:
 
         results = results[:k]
         return_result.results = self.format_results(results)
+        return_result.query = query
 
         logger.info(f"Result from index after clipping: {return_result}")
 
@@ -131,7 +132,7 @@ class Search:
         tokens = self._pre_search(query, expansion, boost_terms, k)
         query = FreeTextQuery(tokens)
         results = self.index.search(query)
-        ret = self._post_search(results, rerank_metadata=True, rerank_lm=True)
+        ret = self._post_search(results, rerank_metadata=True, rerank_lm=False)
 
         ret.time_taken = time.time() - start
         logger.info(
@@ -169,7 +170,8 @@ class Search:
             ret.append(
                 {
                     "doc_id": to_py(doc_result[1]),
-                    "score": to_py(doc_result[0]),
+                    "bm25_score": to_py(doc_result[0]),
+                    "score": to_py(metadata["score"]),
                     "tags": metadata["tags"],
                     "ownerdisplayname": metadata["ownerdisplayname"],
                     "creation_date": to_py(metadata["creationdate"]),
@@ -178,8 +180,8 @@ class Search:
                     "comment_count": to_py(metadata["commentcount"]),
                     "favorite_count": to_py(metadata["favoritecount"]),
                     "metadata_score": to_py(metadata["metadatascore"]),
-                    "title": "TO BE ADDED",
-                    "body": "TO BE ADDED",
+                    "title": metadata["title"],
+                    "body": metadata["body"],
                 }
             )
 

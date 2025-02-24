@@ -1,6 +1,7 @@
 \set ON_ERROR_STOP on
 
 DROP TABLE IF EXISTS temp_posts CASCADE;
+DROP TABLE IF EXISTS temp_answers CASCADE;
 DROP TABLE IF EXISTS temp_users CASCADE;
 DROP TABLE IF EXISTS temp_posthistory CASCADE;
 DROP TABLE IF EXISTS temp_comments;
@@ -12,9 +13,21 @@ CREATE TABLE temp_posts (LIKE posts INCLUDING ALL);
 INSERT INTO temp_posts
 SELECT *
 FROM posts
+WHERE posttypeid = 1
 -- ORDER BY creationdate DESC
 LIMIT number_of_posts;
 -- Could limit to some `creationdate` range
+
+CREATE TABLE temp_answers (LIKE posts INCLUDING ALL);
+INSERT INTO temp_answers
+SELECT *
+FROM posts
+WHERE posttypeid = 2 AND parentid IN (SELECT id FROM temp_posts);
+
+INSERT INTO temp_posts
+SELECT *
+FROM temp_answers;
+
 
 CREATE TABLE temp_users (LIKE users INCLUDING ALL);
 INSERT INTO temp_users
@@ -59,6 +72,7 @@ SELECT b.*
 FROM badges b
 INNER JOIN temp_users u ON b.userid = u.id;
 
+"""
 ALTER TABLE temp_posts ADD FOREIGN KEY (owneruserid) REFERENCES temp_users(id);
 ALTER TABLE temp_posts ADD FOREIGN KEY (lasteditoruserid) REFERENCES temp_users(id);
 ALTER TABLE temp_posthistory ADD FOREIGN KEY (postid) REFERENCES temp_posts(id);
@@ -69,6 +83,7 @@ ALTER TABLE temp_votes ADD FOREIGN KEY (postid) REFERENCES temp_posts(id);
 ALTER TABLE temp_postlinks ADD FOREIGN KEY (postid) REFERENCES temp_posts(id);
 ALTER TABLE temp_postlinks ADD FOREIGN KEY (relatedpostid) REFERENCES temp_posts(id);
 ALTER TABLE temp_badges ADD FOREIGN KEY (userid) REFERENCES temp_users(id);
+"""
 
 
 \copy (SELECT * FROM temp_users ORDER BY id) TO output_path/users.csv WITH (FORMAT CSV, HEADER);
@@ -86,6 +101,7 @@ ALTER TABLE temp_badges ADD FOREIGN KEY (userid) REFERENCES temp_users(id);
 \! sed -i 's/temp_users/users/g; s/temp_posts/posts/g; s/temp_posthistory/posthistory/g; s/temp_comments/comments/g; s/temp_votes/votes/g; s/temp_postlinks/postlinks/g; s/temp_tags/tags/g; s/temp_badges/badges/g;' output_path/schema.sql
 
 DROP TABLE IF EXISTS temp_posts;
+DROP TABLE IF EXISTS temp_answers;
 DROP TABLE IF EXISTS temp_users;
 DROP TABLE IF EXISTS temp_posthistory;
 DROP TABLE IF EXISTS temp_comments;

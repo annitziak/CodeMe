@@ -268,7 +268,10 @@ class DocumentShardedIndexBuilder:
             sum_doc_length = 0
             with open(doc_map_path, "wb") as f:
                 for doc_id, doc_metadata in self.doc_map.items():
-                    doc_offset_dict[doc_id] = f.tell()
+                    doc_offset_dict[doc_id] = (
+                        f.tell(),
+                        doc_metadata.doc_length.get_value(),
+                    )
                     sum_doc_length += doc_metadata.doc_length.get_value()
                     f.write(
                         struct.pack(
@@ -346,6 +349,23 @@ class DocumentShardedIndexBuilder:
                         )
                     )
 
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_hasacceptedanswer"],
+                            doc_metadata.hasacceptedanswer,
+                        )
+                    )
+
+                    raw_bytes_title = doc_metadata.title.encode("utf-8")
+                    title_size = len(raw_bytes_title)
+                    f.write(struct.pack(SIZE_KEY["doc_title"], title_size))
+                    f.write(raw_bytes_title)
+
+                    raw_bytes_body = doc_metadata.body.encode("utf-8")
+                    body_size = len(raw_bytes_body)
+                    f.write(struct.pack(SIZE_KEY["doc_body"], body_size))
+                    f.write(raw_bytes_body)
+
                     self.doc_stats_map = self._update_doc_stats_map(
                         doc_metadata=doc_metadata
                     )
@@ -353,9 +373,10 @@ class DocumentShardedIndexBuilder:
             with open(doc_offset, "wb") as f:
                 f.write(struct.pack(SIZE_KEY["doc_count"], len(doc_offset_dict)))
                 f.write(struct.pack(SIZE_KEY["offset"], sum_doc_length))
-                for doc_id, offset in doc_offset_dict.items():
+                for doc_id, (offset, doc_length) in doc_offset_dict.items():
                     f.write(struct.pack(SIZE_KEY["doc_id"], doc_id))
                     f.write(struct.pack(SIZE_KEY["offset"], offset))
+                    f.write(struct.pack(SIZE_KEY["doc_length"], doc_length))
 
         doc_meta = os.path.join(self.index_path, "shard.meta")
         lock_doc_meta_file = filelock.FileLock(doc_meta + ".lock")
@@ -392,7 +413,7 @@ class DocumentShardedIndexBuilder:
             with open(doc_meta, "w") as f:
                 json.dump(shard_bounds, f)
 
-            logger.info(f"Written {shard_bounds} to {doc_meta}")
+            logger.debug(f"Written shard_bounds ({len(shard_bounds)}) to {doc_meta}")
 
         logger.debug(f"Unlocked {doc_meta}")
         logger.info(

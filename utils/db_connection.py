@@ -41,7 +41,7 @@ class DBConnection:
         return self.conn.cursor()
 
     def connect(self):
-        logger.info(f"Connecting to database with {self.db_params} ...")
+        logger.debug(f"Connecting to database with {self.db_params} ...")
         if self.is_connected():
             logger.warning("Already connected to database.")
             return self
@@ -49,7 +49,7 @@ class DBConnection:
         try:
             self.conn = psycopg2.connect(**self.db_params)
             self.cur = self.conn.cursor()
-            logger.info(f"Connected to database: {self.db_params}")
+            logger.debug(f"Connected to database: {self.db_params}")
         except Exception as e:
             logger.error(f"Error connecting to database: {e}")
             raise e

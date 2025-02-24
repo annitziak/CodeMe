@@ -50,6 +50,7 @@ class EmbedManager:
         device: str = "cpu",
         batch_size: int = 128,
         save_dir: str = ".cache",
+        index_dict_dir: str = ".cache/index",
     ):
         self.embedder = Embedder(pretrained_model_name_or_path, device)
         self.db_connection = DBConnection(db_params)
@@ -64,19 +65,41 @@ class EmbedManager:
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir, exist_ok=True)
 
-    def embed_and_save(self, limit=-1):
-        limit_stmt = f"LIMIT {limit}" if limit > 0 else ""
-        sql_query = f"""
-            SELECT id, title, body
-            FROM posts
-            {limit_stmt}
-        """
+        self.minmax_dict = {}
+        if not os.path.exists(index_dict_dir):
+            raise FileNotFoundError(f"Index dictionary not found in {index_dict_dir}")
+        file = os.path.join(index_dict_dir, "shards.meta")
+        with open(file, "r") as f:
+            self.minmax_dict = json.load(f)
 
-        pbar = tqdm(total=limit)
-
-        self.index = faiss.IndexFlatL2(self.embedder.model.config.hidden_size)
-
+    def embed_and_save(self, limit=-1, top_p=0.2):
         with self.db_connection as conn:
+            conn.execute(
+                "SELECT reltuples AS estimate FROM pg_class WHERE relname = 'posts';"
+            )
+            num_posts = conn.cur.fetchone()[0]
+            limit = min(limit, num_posts) if limit > 0 else num_posts
+
+            sql_query = f"""
+                WITH scored_posts AS (
+                        SELECT id, title, body, score, viewcount, creationdate,
+                        (score * {self.minmax_dict['score']['max']}) / {self.minmax_dict['score']['max'] - self.minmax_dict['score']['min']} +(viewcount * {self.minmax_dict['viewcount']['max']}) / {self.minmax_dict['viewcount']['max'] - self.minmax_dict['viewcount']['min']} +(creationdate * {self.minmax_dict['creationdate']['max']}) / {self.minmax_dict['creationdate']['max'] - self.minmax_dict['creationdate']['min']} AS metadata_score
+                        FROM posts
+                ),
+                top_posts AS (
+                    SELECT *
+                    FROM scored_posts
+                    ORDER BY metadata_score DESC
+                    LIMIT {int(limit * top_p)}
+                )
+                SELECT id, title, body, score, viewcount, creationdate, metadata_score
+                FROM top_posts
+            """
+
+            pbar = tqdm(total=int(limit * top_p) if limit > 0 else None)
+
+            self.index = faiss.IndexFlatL2(self.embedder.model.config.hidden_size)
+
             conn.execute(sql_query)
 
             while True:
@@ -84,7 +107,7 @@ class EmbedManager:
                 if not batch:
                     break
 
-                ids, titles, bodies = zip(*batch)
+                ids, titles, bodies, scores, viewcounts, creationdates = zip(*batch)
                 embeddings = self.embedder.embed_batch(titles, bodies)
 
                 start_idx = self.index.ntotal
