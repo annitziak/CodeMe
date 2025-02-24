@@ -10,6 +10,7 @@ from indexor.index_builder.index_builder import DocumentShardedIndexBuilder
 from indexor.index_builder.index_merger import IndexMerger
 from indexor.structures import DocMetadata, Stat
 
+from preprocessing import CodeBlock, NormalTextBlock
 from preprocessing.preprocessor import Preprocessor
 from preprocessing.tokenizer import BuildTokenizer
 from utils.db_connection import DBConnection
@@ -250,15 +251,17 @@ class IndexBuilder:
         proc_conn = DBConnection(db_params)
         min_id = float("inf")
         max_id = float("-inf")
+        last_post_id = None
         with proc_conn as conn:
             cur = conn.get_cursor(name=f"index_builder_{shard}")
             # include tags???
             debug = "LIMIT 100" if self.debug else ""
             select_query = f"""SELECT
-            id, title, body, creationdate, score, viewcount, owneruserid, ownerdisplayname, tags, answercount, commentcount, favoritecount
+            id, title, body, creationdate, score, viewcount, owneruserid, ownerdisplayname, tags, answercount, commentcount, favoritecount, acceptedanswerid
             FROM posts
-            WHERE id >= {start} AND id <= {end}
-            ORDER BY id ASC {debug}"""
+            WHERE id >= {start} AND id <= {end} AND posttypeid = 1
+            ORDER BY id ASC
+            {debug}"""
             cur.execute(select_query)
             logger.info(
                 "Processing shard %d: %d-%d with query %s",
@@ -280,7 +283,7 @@ class IndexBuilder:
                     post_id,
                     doc_terms,
                     doc_metadata,
-                ) in self._process_posts_batch(batch):
+                ) in self._process_posts_batch(batch, conn, shard=shard):
                     if post_id < min_id:
                         min_id = post_id
                     if post_id > max_id:
@@ -293,7 +296,7 @@ class IndexBuilder:
 
         return index_builder.doc_count
 
-    def _process_posts_batch(self, rows: tuple[list]):
+    def _process_posts_batch(self, rows: tuple[list], conn, shard=-1):
         """
         A generator that processes a batch of posts and yields the post ID and document terms for each post
         This is called by _process_posts_shard to process a batch of posts for each shard
@@ -306,19 +309,42 @@ class IndexBuilder:
             doc_terms: dict
             postition_offset: int
         """
+        body_limit = 30
         for row in rows:
             post_id, title, body, *raw_metadata = row
+            '''
+            sql_query = f"""SELECT id, title, body
+            FROM posts
+            WHERE parentid = {post_id} AND posttypeid = 2"""
+            cursor = conn.get_cursor()
+            cursor.execute(sql_query)
+            answers = cursor.fetchall()
+            '''
+
+            has_accepted_answer = raw_metadata[-1] is not None
+            raw_metadata = raw_metadata[:-1]
+
             doc_metadata = DocMetadata(*raw_metadata)
             doc_metadata.doc_length = Stat(0)
+            doc_metadata.title = title if title is not None else ""
+            doc_metadata.hasacceptedanswer = has_accepted_answer
 
             doc_terms = {}
             position_offset = 0
 
-            for field, text in [("title", title), ("body", body)]:
+            answers = []
+            blocks = [("title", title), ("body", body)] + [
+                ("body", answer[2]) for answer in answers
+            ]
+            body = []
+
+            for field, text in blocks:
                 if text is None:
                     continue
 
-                blocks = self._tokenize(text, field=field)
+                blocks, original_blocks = self._tokenize(
+                    text, field=field, return_original_text=True
+                )
                 for block in blocks:
                     for word in block.words:
                         if word.term not in doc_terms.keys():
@@ -333,17 +359,33 @@ class IndexBuilder:
                                 if word.start_position >= 0
                                 else -1
                             )
-
                     position_offset += block.block_length
 
+                for block in original_blocks:
+                    if len(body) < body_limit:
+                        if (
+                            isinstance(block, NormalTextBlock)
+                            or isinstance(block, CodeBlock)
+                            and block.in_line
+                        ):
+                            if block.text is None:
+                                continue
+
+                            body += [
+                                x
+                                for x in block.text.split()
+                                if isinstance(x, str) and len(x.strip()) > 0
+                            ]
+
             doc_metadata.doc_length.update(position_offset, reset=True)
+            doc_metadata.body = " ".join(body)
             yield post_id, doc_terms, doc_metadata
 
-    def _tokenize(self, text: str, field: str = "body"):
+    def _tokenize(self, text: str, field: str = "body", *args, **kwargs):
         if field == "title":
-            return self.title_preprocessor(text)
+            return self.title_preprocessor(text, *args, **kwargs)
         elif field == "body":
-            return self.body_preprocessor(text)
+            return self.body_preprocessor(text, *args, **kwargs)
         else:
             raise ValueError(f"Invalid field: {field}")
 
@@ -522,5 +564,5 @@ if __name__ == "__main__":
     print(index.get_term("java", positions=True))
     print(index.get_term("javascript", positions=True))
 
-    print(index.get_document_length(26602868))
+    # print(index.get_document_length(26602868))
     print("HI")

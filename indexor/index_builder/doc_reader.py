@@ -28,36 +28,18 @@ def read_doc(
     _ = struct.unpack(
         SIZE_KEY["offset"],
         sub_offset_f.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
-    )[0]
+    )[0]  # sum_doc_length
 
     for _ in range(local_doc_count):
-        (
-            doc_length,
-            score,
-            view_count,
-            owneruserid,
-            answer_count,
-            comment_count,
-            favorite_count,
-            size_display_name,
-            ownerdisplayname,
-            raw_tag_size,
-            tags,
-            creation_date,
-        ) = (
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            "",
-            0,
-            "",
-            0,
-        )
+        doc_length, score, view_count, owneruserid = 0, 0, 0, 0
+        answer_count, comment_count, favorite_count = 0, 0, 0
+        size_display_name, ownerdisplayname = 0, ""
+        raw_tag_size, tags = 0, ""
+        creation_date = 0
+        has_accepted_answer = 0
+        raw_body_size, body = 0, ""
+        raw_title_size, title = 0, ""
+
         doc_id = struct.unpack(
             SIZE_KEY["doc_id"],
             sub_offset_f.read(READ_SIZE_KEY[SIZE_KEY["doc_id"]]),
@@ -67,6 +49,10 @@ def read_doc(
         offset = struct.unpack(
             SIZE_KEY["offset"],
             sub_offset_f.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
+        )[0]
+        doc_length = struct.unpack(
+            SIZE_KEY["doc_length"],
+            sub_offset_f.read(READ_SIZE_KEY[SIZE_KEY["doc_length"]]),
         )[0]
 
         try:
@@ -121,15 +107,50 @@ def read_doc(
                 sub_shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_creationdate"]]),
             )[0]
 
+            has_accepted_answer = struct.unpack(
+                SIZE_KEY["doc_hasacceptedanswer"],
+                sub_shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_hasacceptedanswer"]]),
+            )[0]
+
+            raw_title_size = struct.unpack(
+                SIZE_KEY["doc_title"],
+                sub_shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_title"]]),
+            )[0]
+            title = sub_shard_f.read(raw_title_size).decode("utf-8")
+            raw_body_size = struct.unpack(
+                SIZE_KEY["doc_body"],
+                sub_shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_body"]]),
+            )[0]
+            body = sub_shard_f.read(raw_body_size).decode("utf-8")
+
         except (struct.error, UnicodeDecodeError) as e:
             import traceback
 
             logger.error(
                 f"Error reading {shard_f} after length {len(docs_offset)} {e} {local_doc_count}"
             )
+            logger.error(f"Doc length: {doc_length}")
+            logger.error(f"Doc ID: {doc_id}")
+            logger.error(f"Doc Offset: {offset}")
+            logger.error(f"Doc Score: {score}")
+            logger.error(f"Doc View Count: {view_count}")
+            logger.error(f"Doc Owner User ID: {owneruserid}")
+            logger.error(f"Doc Answer Count: {answer_count}")
+            logger.error(f"Doc Comment Count: {comment_count}")
+            logger.error(f"Doc Favorite Count: {favorite_count}")
+            logger.error(f"Doc Owner Display Name: {size_display_name}")
+            logger.error(f"Doc Owner Display Name: {ownerdisplayname}")
+            logger.error(f"Doc Tags: {raw_tag_size}")
+            logger.error(f"Doc Tags: {tags}")
+            logger.error(f"Doc Creation Date: {creation_date}")
+            logger.error(f"Doc Has Accepted Answer: {has_accepted_answer}")
+            logger.error(f"Doc Title: {raw_title_size}")
+            logger.error(f"Doc Title: {title}")
+            logger.error(f"Doc Body: {raw_body_size}")
+            logger.error(f"Doc Body: {body}")
             logger.error(traceback.format_exc())
 
-        docs_offset[int(doc_id)] = shard_f.tell()
+        docs_offset[int(doc_id)] = (shard_f.tell(), doc_length)
 
         shard_f.write(struct.pack(SIZE_KEY["doc_length"], doc_length))
         doc_custom_score = 0
@@ -156,6 +177,13 @@ def read_doc(
         shard_f.write(tags.encode("utf-8"))
 
         shard_f.write(struct.pack(SIZE_KEY["doc_creationdate"], creation_date))
+        shard_f.write(
+            struct.pack(SIZE_KEY["doc_hasacceptedanswer"], has_accepted_answer)
+        )
+        shard_f.write(struct.pack(SIZE_KEY["doc_title"], raw_title_size))
+        shard_f.write(title.encode("utf-8"))
+        shard_f.write(struct.pack(SIZE_KEY["doc_body"], raw_body_size))
+        shard_f.write(body.encode("utf-8"))
 
         docs_metadata.update_with_raw(
             doc_length=doc_length,

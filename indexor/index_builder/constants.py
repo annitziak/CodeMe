@@ -1,7 +1,9 @@
 SIZE_KEY = {
     "offset": "<Q",
+    "offset_doc_length": "<QI",
     "pos_offset": "<QQ",
     "offset_shard": "<HQ",
+    "offset_shard_doc_length": "<HQI",
     "pos_offset_shard": "<HQQ",
     "postings_count": "<I",
     "deltaTF": "<IH",
@@ -23,6 +25,9 @@ SIZE_KEY = {
     "doc_favoritecount": "<I",
     "doc_creationdate": "<I",
     "doc_metadatascore": "<f",
+    "doc_hasacceptedanswer": "<H",
+    "doc_title": "<I",
+    "doc_body": "<I",
 }
 
 READ_SIZE_KEY = {
@@ -33,4 +38,6 @@ READ_SIZE_KEY = {
     "<HQ": 10,
     "<i": 4,
     "<f": 4,
+    "<QI": 12,
+    "<HQI": 14,
 }

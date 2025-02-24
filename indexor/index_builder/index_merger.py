@@ -124,8 +124,12 @@ class IndexMerger:
             if term_offsets is None:
                 term_offsets = OrderedDict()
                 for i in range(shards):
+                    index_path = os.path.join(self.index_path, f"{prefix}_{i}.index")
+                    if not os.path.exists(index_path):
+                        continue
+
                     reader = ShardReader(
-                        os.path.join(self.index_path, f"{prefix}_{i}.index"),
+                        index_path,
                         os.path.join(self.index_path, f"{prefix}_{i}.position"),
                         os.path.join(self.index_path, f"{prefix}_{i}.offset"),
                     )
@@ -180,6 +184,8 @@ class IndexMerger:
                     f_offset_filename = os.path.join(
                         self.index_path, f"{prefix}_{i}.offset"
                     )
+                    if not os.path.exists(f_offset_filename):
+                        continue
                     with open(f_offset_filename, "rb") as f_offset:
                         doc_count = struct.unpack(
                             SIZE_KEY["doc_count"],
@@ -200,7 +206,13 @@ class IndexMerger:
                                     SIZE_KEY["offset"],
                                     f_offset.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
                                 )[0]
-                                yield doc_id, i, offset
+                                doc_length = struct.unpack(
+                                    SIZE_KEY["doc_length"],
+                                    f_offset.read(
+                                        READ_SIZE_KEY[SIZE_KEY["doc_length"]]
+                                    ),
+                                )[0]
+                                yield doc_id, i, offset, doc_length
                             except struct.error as e:
                                 logger.error(
                                     f"Error reading {f_offset_filename} after length {len(term_offsets)} {e}"
@@ -210,9 +222,11 @@ class IndexMerger:
                 for item in term_offsets:
                     yield item
 
-        for doc_id, shard, offset in gen_term_offset(doc_offsets):
+        for doc_id, shard, offset, doc_length in gen_term_offset(doc_offsets):
             # print(doc_id, shard, offset)
-            encoded_value = struct.pack(SIZE_KEY["offset_shard"], shard, offset)
+            encoded_value = struct.pack(
+                SIZE_KEY["offset_shard_doc_length"], shard, offset, doc_length
+            )
             items.append((str(doc_id), encoded_value))
 
         fst = marisa_trie.BytesTrie(items)
@@ -540,21 +554,34 @@ class IndexMerger:
 
                 if "_" in save_filename:
                     doc_offsets[int(doc_id)] = struct.unpack(
-                        SIZE_KEY["offset_shard"], values
-                    )[0]
+                        SIZE_KEY["offset_shard_doc_length"], values
+                    )[1:]
                 else:
                     doc_offsets[int(doc_id)] = struct.unpack(
-                        SIZE_KEY["offset"], values
-                    )[0]
+                        SIZE_KEY["offset_doc_length"], values
+                    )
 
         items = []
-        for doc_id, offset in doc_offsets.items():
+        for doc_id, (offset, doc_length) in doc_offsets.items():
             if shard != -1:
                 items.append(
-                    (str(doc_id), struct.pack(SIZE_KEY["offset_shard"], shard, offset))
+                    (
+                        str(doc_id),
+                        struct.pack(
+                            SIZE_KEY["offset_shard_doc_length"],
+                            shard,
+                            offset,
+                            doc_length,
+                        ),
+                    )
                 )
             else:
-                items.append((str(doc_id), struct.pack(SIZE_KEY["offset"], offset)))
+                items.append(
+                    (
+                        str(doc_id),
+                        struct.pack(SIZE_KEY["offset_doc_length"], offset, doc_length),
+                    )
+                )
 
         fst = marisa_trie.BytesTrie(items)
         fst.save(os.path.join(self.output_dir, f"{save_filename}.fst"))
@@ -716,43 +743,49 @@ class IndexMerger:
             doc_count = 0
             sum_doc_length = 0
             for shard_file, offset_filename in zip(shard_files, offset_files):
-                with (
-                    open(offset_filename, "rb") as roffset_f,
-                ):
-                    doc_count += struct.unpack(
-                        SIZE_KEY["doc_count"],
-                        roffset_f.read(READ_SIZE_KEY[SIZE_KEY["doc_count"]]),
-                    )[0]
-                    sum_doc_length += struct.unpack(
-                        SIZE_KEY["offset"],
-                        roffset_f.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
-                    )[0]
+                _lock_offset_file = filelock.FileLock(offset_filename + ".lock")
+                with _lock_offset_file:
+                    with (
+                        open(offset_filename, "rb") as roffset_f,
+                    ):
+                        doc_count += struct.unpack(
+                            SIZE_KEY["doc_count"],
+                            roffset_f.read(READ_SIZE_KEY[SIZE_KEY["doc_count"]]),
+                        )[0]
+                        sum_doc_length += struct.unpack(
+                            SIZE_KEY["offset"],
+                            roffset_f.read(READ_SIZE_KEY[SIZE_KEY["offset"]]),
+                        )[0]
 
             with open(docs_file, "wb") as docs_f, open(offset_file, "wb") as offset_f:
                 for shard_file, offset_filename in zip(shard_files, offset_files):
-                    with (
-                        open(shard_file, "rb") as shard_f,
-                        open(offset_filename, "rb") as roffset_f,
-                    ):
-                        roffset_f.seek(0)
-                        shard_f.seek(0)
-                        docs_offset, doc_stats = read_doc(
-                            docs_f,
-                            offset_f,
-                            shard_f,
-                            roffset_f,
-                            docs_offset=docs_offset,
-                            docs_metadata=doc_stats,
-                            minmax_stat=minmax_stat,
-                        )
+                    _lock_shard_file = filelock.FileLock(shard_file + ".lock")
+                    _lock_offset_file = filelock.FileLock(offset_filename + ".lock")
+                    with _lock_shard_file, _lock_offset_file:
+                        with (
+                            open(shard_file, "rb") as shard_f,
+                            open(offset_filename, "rb") as roffset_f,
+                        ):
+                            roffset_f.seek(0)
+                            shard_f.seek(0)
+                            docs_offset, doc_stats = read_doc(
+                                docs_f,
+                                offset_f,
+                                shard_f,
+                                roffset_f,
+                                docs_offset=docs_offset,
+                                docs_metadata=doc_stats,
+                                minmax_stat=minmax_stat,
+                            )
 
                 offset_f.seek(0)
                 offset_f.write(struct.pack(SIZE_KEY["doc_count"], doc_count))
                 offset_f.write(struct.pack(SIZE_KEY["offset"], sum_doc_length))
 
-                for doc_id, offset in docs_offset.items():
+                for doc_id, (offset, doc_length) in docs_offset.items():
                     offset_f.write(struct.pack(SIZE_KEY["doc_id"], doc_id))
                     offset_f.write(struct.pack(SIZE_KEY["offset"], offset))
+                    offset_f.write(struct.pack(SIZE_KEY["doc_length"], doc_length))
 
         logger.debug(f"Unlocked {docs_file}")
         shutil.move(docs_file, docs_file.replace(".temp", ""))

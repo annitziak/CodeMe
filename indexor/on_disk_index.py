@@ -9,6 +9,7 @@ import time
 import logging
 import psutil
 import numpy as np
+import heapq
 
 from numba import jit, uint16, uint32, int64, types
 from concurrent.futures import ProcessPoolExecutor
@@ -291,7 +292,7 @@ class DocLengthCache:
     def __init__(self):
         self.cache = {}
 
-        self.max_size = 10_000_000
+        self.max_size = 1_000_000
 
     def get(self, doc_id: int):
         return self.cache.get(doc_id, None)
@@ -299,6 +300,7 @@ class DocLengthCache:
     def put(self, doc_id: int, doc_length: int):
         if len(self.cache) > self.max_size:
             self.cache.popitem(last=False)
+
         self.cache[doc_id] = doc_length
 
 
@@ -347,6 +349,9 @@ class ShardWorker:
             "ownerdisplayname",
             "tags",
             "creationdate",
+            "hasacceptedanswer",
+            "title",
+            "body",
         ]
 
         self.doc_length_cache = DocLengthCache()
@@ -373,6 +378,7 @@ class ShardWorker:
 
         self.avg_doc_length = sum_doc_length / self.doc_count
 
+        """
         for doc_id, value in self.doc_fst.items():
             if shard != self.shard:
                 continue
@@ -385,6 +391,7 @@ class ShardWorker:
                 doc_id, shard, offset, keys=["doc_length"]
             )["doc_length"]
             self.doc_length_cache.put(np.int32(doc_id), doc_length)
+        """
 
     def _get_term(
         self,
@@ -737,18 +744,23 @@ class ShardWorker:
                 return {"doc_length": doc_length}
 
         mmap = self.doc_mmaps.load(shard)[shard]
+        doc_length = -1
         if offset == -1:
-            for _shard, _offset in _read_fst(
+            for _shard, _offset, _doc_length in _read_fst(
                 self.doc_fst,
                 str(doc_id),
                 is_sharded=True,
-                size_key=SIZE_KEY["offset"],
-                shard_size_key=SIZE_KEY["offset_shard"],
+                size_key=SIZE_KEY["offset_doc_length"],
+                shard_size_key=SIZE_KEY["offset_shard_doc_length"],
             ):
                 if _shard != shard:
                     continue
 
                 offset = _offset
+                doc_length = _doc_length
+
+        if offset != -1 and keys[0] == "doc_length" and len(keys) == 1:
+            return {"doc_length": doc_length}
 
         mmap.seek(offset)
         if "all" in keys:
@@ -762,7 +774,7 @@ class ShardWorker:
             if key not in keys:
                 continue
 
-            if key in ["ownerdisplayname", "tags"]:
+            if key in ["ownerdisplayname", "tags", "title", "body"]:
                 size = struct.unpack(
                     SIZE_KEY[f"doc_{key}"],
                     mmap.read(READ_SIZE_KEY[SIZE_KEY[f"doc_{key}"]]),
@@ -1037,15 +1049,18 @@ class OnDiskIndex(IndexBase):
         return self.get_term(term).document_frequency
 
     def get_document_metadata(self, doc_id: int, keys=["all"]) -> dict:
-        shard, offset = list(
+        shard, offset, doc_length = list(
             _read_fst(
                 self.doc_fst,
                 str(doc_id),
                 is_sharded=self.is_sharded,
-                size_key=SIZE_KEY["offset"],
-                shard_size_key=SIZE_KEY["offset_shard"],
+                size_key=SIZE_KEY["offset_doc_length"],
+                shard_size_key=SIZE_KEY["offset_shard_doc_length"],
             )
         )[0]
+        if offset != -1 and keys[0] == "doc_length" and len(keys) == 1:
+            return {"doc_length": doc_length}
+
         future = self.worker_pool[shard].submit(
             worker_get_document_metadata, doc_id, shard=shard, offset=offset, keys=keys
         )
@@ -1053,27 +1068,47 @@ class OnDiskIndex(IndexBase):
         return future.result()
 
     def get_document_length(self, doc_id: int) -> int:
-        shard, offset = list(
+        print(
+            list(
+                _read_fst(
+                    self.doc_fst,
+                    str(doc_id),
+                    is_sharded=self.is_sharded,
+                    size_key=SIZE_KEY["offset_doc_length"],
+                    shard_size_key=SIZE_KEY["offset_shard_doc_length"],
+                )
+            ),
+        )
+        shard, offset, doc_length = list(
             _read_fst(
                 self.doc_fst,
                 str(doc_id),
                 is_sharded=self.is_sharded,
-                size_key=SIZE_KEY["offset"],
-                shard_size_key=SIZE_KEY["offset_shard"],
+                size_key=SIZE_KEY["offset_doc_length"],
+                shard_size_key=SIZE_KEY["offset_shard_doc_length"],
             )
         )[0]
-        future = self.worker_pool[shard].submit(
-            worker_get_document_metadata,
-            doc_id,
-            shard=shard,
-            offset=offset,
-            keys=["doc_length"],
-        )
+        return doc_length
 
-        return future.result()["doc_length"]
+    def get_vocab(self, top_p=0.2) -> list[str]:
+        """
+        Retrieves the vocabulary of the index
+        Args:
+            top_p (float): The percentage of terms to return based on document frequency
+        """
+        ret_list = []
+        capacity = int(len(self.term_fst) * top_p)
+        for term in self.term_fst.keys():
+            if isinstance(term, bytes):
+                term = term.decode("utf-8")
 
-    def get_vocab(self) -> list[str]:
-        return list(self.term_fst.keys())
+            doc_freq = self.get_document_frequency(term)
+            if len(ret_list) < capacity:
+                heapq.heappush(ret_list, (doc_freq, term))
+            else:
+                heapq.heappushpop(ret_list, (doc_freq, term))
+
+        return [x[1] for x in ret_list]
 
     def get_all_posting_lists(self, term: str, positions=False) -> list[PostingList]:
         return [
@@ -1164,6 +1199,7 @@ class OnDiskIndex(IndexBase):
         with open(doc_meta_path, "w") as f:
             tags = [
                 "creationdate",
+                "hasacceptedanswer",
                 "metadatascore",
                 "score",
                 "viewcount",
@@ -1173,6 +1209,8 @@ class OnDiskIndex(IndexBase):
                 "favoritecount",
                 "ownerdisplayname",
                 "tags",
+                "title",
+                "body",
             ]
             f.write(f'doc_id,{",".join(tags)}\n')
             for doc_id in sorted_doc_ids:

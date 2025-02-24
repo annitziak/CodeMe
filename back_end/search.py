@@ -2,14 +2,14 @@ import time
 import os
 import logging
 
-from dataclasses import dataclass
-from typing import Any
 
 from preprocessing.preprocessor import Preprocessor
 from indexor.index import Index
 from indexor.query import FreeTextQuery, BooleanQuery
 from retrieval_models.retrieval_functions import query_expansion
 from retrieval_models.query_expansion import EmbeddingModel
+
+from back_end.modeling_outputs import SearchResult
 from back_end.mock_search import MockSearch
 from back_end.reranker import Reranker
 
@@ -65,17 +65,6 @@ def to_py(item):
     return item
 
 
-@dataclass
-class SearchResult:
-    results: list[dict[str, Any]]
-    time_taken: float
-    total_results: int
-    query: str
-
-    def __str__(self):
-        return f"Search Result(\n\tresults={self.results[:5]}\n\ttime_taken={self.time_taken}\n\ttotal_results={self.total_results}\n\tquery={self.query}\n)"
-
-
 class Search:
     def __init__(
         self,
@@ -122,6 +111,7 @@ class Search:
 
         results = results[:k]
         return_result.results = self.format_results(results)
+        return_result.query = query
 
         logger.info(f"Result from index after clipping: {return_result}")
 
@@ -142,7 +132,7 @@ class Search:
         tokens = self._pre_search(query, expansion, boost_terms, k)
         query = FreeTextQuery(tokens)
         results = self.index.search(query)
-        ret = self._post_search(results, rerank_metadata=True, rerank_lm=True)
+        ret = self._post_search(results, rerank_metadata=True, rerank_lm=False)
 
         ret.time_taken = time.time() - start
         logger.info(
@@ -180,7 +170,8 @@ class Search:
             ret.append(
                 {
                     "doc_id": to_py(doc_result[1]),
-                    "score": to_py(doc_result[0]),
+                    "bm25_score": to_py(doc_result[0]),
+                    "score": to_py(metadata["score"]),
                     "tags": metadata["tags"],
                     "ownerdisplayname": metadata["ownerdisplayname"],
                     "creation_date": to_py(metadata["creationdate"]),
@@ -189,8 +180,8 @@ class Search:
                     "comment_count": to_py(metadata["commentcount"]),
                     "favorite_count": to_py(metadata["favoritecount"]),
                     "metadata_score": to_py(metadata["metadatascore"]),
-                    "title": "TO BE ADDED",
-                    "body": "TO BE ADDED",
+                    "title": metadata["title"],
+                    "body": metadata["body"],
                 }
             )
 
