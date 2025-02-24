@@ -35,7 +35,7 @@ def compute_clarity_score(retrieved_docs, corpus_vocab):
         clarity_score += p_retrieved * math.log(p_retrieved / p_corpus)
     return clarity_score
 
-# Collection Overlap- measures how much the terms in the query are present in the retrieved documents.
+# Collection Overlap- measures how much the terms in the query are present in the retrieved documents.-Delete it not used!
 def compute_collection_overlap(query_tokens, retrieved_docs):
     """
     Compute Collection Overlap between query tokens and retrieved document terms.

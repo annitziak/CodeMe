@@ -1,48 +1,47 @@
-import { useState } from "react";
+// src/pages/ResultsPage.jsx
+import { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useSearchQuery } from "../features/searchApi";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Search, X, Eye, MessageSquare, ThumbsUp, Filter } from "lucide-react";
 
-const searchResults = [
-  {
-    title: "How to use Python for web scraping",
-    description:
-      "I'm trying to scrape data from a website using BeautifulSoup but facing an issue...",
-    tags: ["Python", "Web Scraping"],
-    upvotes: 245,
-    views: "1.2K",
-    comments: 15,
-  },
-  ...Array.from({ length: 15 }, (_, i) => ({
-    title: `Python Web Scraping - Question ${i + 2}`,
-    description: `Another question about web scraping techniques and issues...`,
-    tags: ["Python", "Web Scraping"],
-    upvotes: Math.floor(Math.random() * 500),
-    views: `${Math.floor(Math.random() * 3)}K`,
-    comments: Math.floor(Math.random() * 20),
-  })),
-];
-
 const ResultsPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-
-  const initialQuery = searchParams.get("query") || "";
-
-  console.log(initialQuery, "query");
+  const initialQuery = decodeURIComponent(searchParams.get("query") || "");
   const [query, setQuery] = useState(initialQuery);
   const [selectedFilters, setSelectedFilters] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const resultsPerPage = 5;
 
+  // Fetch search results using RTK Query
+  const { data, error, isLoading, refetch } = useSearchQuery(query, {
+    skip: !query, // Skip fetching if no query
+  });
+
+  useEffect(() => {
+    if (query.trim()) {
+      refetch();
+    }
+  }, [query, refetch]);
+
+  const handleSearch = () => {
+    if (query.trim()) {
+      setSearchParams({ query: encodeURIComponent(query) });
+      refetch();
+    }
+  };
+
+  const clearQuery = () => {
+    setQuery("");
+    setSearchParams({});
+  };
+
+  // Pagination logic
   const indexOfLastResult = currentPage * resultsPerPage;
   const indexOfFirstResult = indexOfLastResult - resultsPerPage;
-  const currentResults = searchResults.slice(
-    indexOfFirstResult,
-    indexOfLastResult
-  );
-
-  const totalPages = Math.ceil(searchResults.length / resultsPerPage);
+  const currentResults = data?.result.slice(indexOfFirstResult, indexOfLastResult) || [];
+  const totalPages = Math.ceil((data?.result.length || 0) / resultsPerPage);
 
   const toggleFilter = (filter) => {
     setSelectedFilters((prevFilters) =>
@@ -50,17 +49,6 @@ const ResultsPage = () => {
         ? prevFilters.filter((f) => f !== filter)
         : [...prevFilters, filter]
     );
-  };
-
-  const handleSearch = () => {
-    if (query.trim()) {
-      setSearchParams({ query: encodeURIComponent(query) });
-    }
-  };
-
-  const clearQuery = () => {
-    setQuery("");
-    setSearchParams({});
   };
 
   return (
@@ -95,67 +83,76 @@ const ResultsPage = () => {
 
       <div className="flex flex-grow w-full max-w-6xl mx-auto mt-10 grid grid-cols-3 gap-8 px-4 pb-7">
         <div className="col-span-2 space-y-6">
+          {isLoading && <p>Loading results...</p>}
+          {error && <p className="text-red-500">Error fetching results.</p>}
           {currentResults.map((result, index) => (
             <div key={index} className="border-b border-gray-300 pb-4">
               <h3 className="text-lg font-bold text-blue-600 flex items-center space-x-2">
                 🔵 <span>{result.title}</span>
               </h3>
-              <p className="text-gray-600 mt-1 italic">{result.description}</p>
+              <p className="text-gray-600 mt-1 italic">{result.snippet}</p>
               <div className="flex space-x-2 mt-2">
-                {result.tags.map((tag, i) => (
-                  <span
-                    key={i}
-                    className="bg-yellow-200 text-yellow-700 text-xs font-semibold px-2 py-1 rounded-full flex items-center space-x-1"
-                  >
-                    ✏️ {tag}
-                  </span>
+                {result.tags.split("|").map((tag, i) => (
+                  tag && (
+                    <span
+                      key={i}
+                      className="bg-yellow-200 text-yellow-700 text-xs font-semibold px-2 py-1 rounded-full flex items-center space-x-1"
+                    >
+                      ✏️ {tag}
+                    </span>
+                  )
                 ))}
               </div>
               <div className="flex items-center space-x-6 mt-2 text-gray-500 text-sm">
                 <span className="flex items-center space-x-1">
                   <ThumbsUp size={16} />
-                  <span>{result.upvotes} upvotes</span>
+                  <span>{result.favorite_count} upvotes</span>
                 </span>
                 <span className="flex items-center space-x-1">
                   <Eye size={16} />
-                  <span>{result.views} views</span>
+                  <span>{result.view_count} views</span>
                 </span>
                 <span className="flex items-center space-x-1">
                   <MessageSquare size={16} />
-                  <span>{result.comments} comments</span>
+                  <span>{result.comment_count} comments</span>
                 </span>
               </div>
             </div>
           ))}
 
-          <div className="flex justify-between mt-auto pb-10">
-            <Button
-              className={`px-4 py-2 rounded-lg ${
-                currentPage === 1
-                  ? "opacity-50 cursor-not-allowed"
-                  : "bg-blue-500 text-white hover:bg-blue-600"
-              }`}
-              disabled={currentPage === 1}
-              onClick={() => setCurrentPage((prev) => prev - 1)}
-            >
-              Previous
-            </Button>
-            <span className="text-gray-700">
-              Page {currentPage} of {totalPages}
-            </span>
-            <Button
-              className={`px-4 py-2 rounded-lg ${
-                currentPage === totalPages
-                  ? "opacity-50 cursor-not-allowed"
-                  : "bg-blue-500 text-white hover:bg-blue-600"
-              }`}
-              disabled={currentPage === totalPages}
-              onClick={() => setCurrentPage((prev) => prev + 1)}
-            >
-              Next
-            </Button>
-          </div>
+          {/* Pagination */}
+          {data?.result.length > resultsPerPage && (
+            <div className="flex justify-between mt-auto pb-10">
+              <Button
+                className={`px-4 py-2 rounded-lg ${
+                  currentPage === 1
+                    ? "opacity-50 cursor-not-allowed"
+                    : "bg-blue-500 text-white hover:bg-blue-600"
+                }`}
+                disabled={currentPage === 1}
+                onClick={() => setCurrentPage((prev) => prev - 1)}
+              >
+                Previous
+              </Button>
+              <span className="text-gray-700">
+                Page {currentPage} of {totalPages}
+              </span>
+              <Button
+                className={`px-4 py-2 rounded-lg ${
+                  currentPage === totalPages
+                    ? "opacity-50 cursor-not-allowed"
+                    : "bg-blue-500 text-white hover:bg-blue-600"
+                }`}
+                disabled={currentPage === totalPages}
+                onClick={() => setCurrentPage((prev) => prev + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          )}
         </div>
+
+        {/* Filters */}
         <div className="col-span-1">
           <h3 className="text-lg font-bold text-gray-700 flex items-center space-x-2">
             <Filter size={20} className="text-blue-500" />

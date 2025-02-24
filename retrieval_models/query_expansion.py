@@ -7,7 +7,7 @@ from transformers import AutoTokenizer, AutoModel
 from sklearn.metrics.pairwise import cosine_similarity
 
 class EmbeddingModel:
-    def __init__(self, vocab: list, model_name="microsoft/codebert-base", save_path="retrieval_models/data/vocab_embeddings.pkl"):
+    def __init__(self, vocab: list, model_name="microsoft/codebert-base", save_path="data/vocab_embeddings.pkl"):
         """
         Initialize the EmbeddingModel with the specified vocabulary and model.
         Args:
@@ -114,7 +114,18 @@ class EmbeddingModel:
         Returns:
             list: A list of words most similar to the input word.
         """
-        target_embedding = self.get_embedding(word).reshape(1, -1)  # Ensure correct shape
-        similarities = cosine_similarity(target_embedding, self.embeddings)[0]
-        top_indices = np.argsort(similarities)[::-1][:top_k]
-        return [self.vocab[i] for i in top_indices]
+        target_embedding = self.get_embedding(word)
+
+        if len(target_embedding) == 0 or target_embedding is None:
+            print(f"❌ Word '{word}' not found in vocabulary. Cannot find similar words.")
+            return []
+        
+        target_embedding = target_embedding.reshape(1, -1)  # Correctly reshape for cosine similarity
+        similarities = cosine_similarity(target_embedding, self.embeddings)[0]  # Compute similarities
+        
+
+        top_indices = np.argsort(similarities)[::-1][1:top_k+1]  # Skip the first as it's the same word
+        print(top_indices)
+        
+        similar_words = [self.vocab[i] for i in top_indices]  # Retrieve most similar words
+        return similar_words
