@@ -1,23 +1,42 @@
-// src/pages/ResultsPage.jsx
 import { useState, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useLocation } from "react-router-dom";
 import { useSearchQuery } from "../features/searchApi";
 import { Input } from "@/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import { Search, X, Eye, MessageSquare, ThumbsUp, Filter } from "lucide-react";
+import {
+  Search,
+  X,
+  Eye,
+  MessageSquare,
+  ThumbsUp,
+  Filter,
+  Star,
+} from "lucide-react";
 
 const ResultsPage = () => {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams("python");
+  const location = useLocation();
+
   const initialQuery = decodeURIComponent(searchParams.get("query") || "");
   const [query, setQuery] = useState(initialQuery);
   const [selectedFilters, setSelectedFilters] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const resultsPerPage = 5;
 
-  // Fetch search results using RTK Query
-  const { data, error, isLoading, refetch } = useSearchQuery(query, {
-    skip: !query, // Skip fetching if no query
-  });
+  // Determine if it's an advanced search based on the route
+  const isAdvancedSearch = location.pathname.includes("advanced_search");
+
+  // Fetch search results using RTK Query with correct search type
+  const { data, error, isLoading, refetch } = useSearchQuery(
+    { query, searchType: isAdvancedSearch ? "advanced" : "regular" },
+    { skip: !query }
+  );
 
   useEffect(() => {
     if (query.trim()) {
@@ -40,7 +59,8 @@ const ResultsPage = () => {
   // Pagination logic
   const indexOfLastResult = currentPage * resultsPerPage;
   const indexOfFirstResult = indexOfLastResult - resultsPerPage;
-  const currentResults = data?.result.slice(indexOfFirstResult, indexOfLastResult) || [];
+  const currentResults =
+    data?.result.slice(indexOfFirstResult, indexOfLastResult) || [];
   const totalPages = Math.ceil((data?.result.length || 0) / resultsPerPage);
 
   const toggleFilter = (filter) => {
@@ -55,7 +75,7 @@ const ResultsPage = () => {
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-[#F5F7FA] to-[#E0E7EE]">
       <div className="w-full max-w-6xl mx-auto mt-6 flex items-center px-4 space-x-6">
         <h1 className="text-3xl font-semibold text-blue-600 whitespace-nowrap">
-          CodeMe
+          CodeMe {isAdvancedSearch ? "(Advanced Search)" : "(Regular Search)"}
         </h1>
         <div className="relative flex items-center bg-white shadow-md rounded-full w-[75%]">
           <Search className="text-gray-400 ml-4" />
@@ -87,34 +107,63 @@ const ResultsPage = () => {
           {error && <p className="text-red-500">Error fetching results.</p>}
           {currentResults.map((result, index) => (
             <div key={index} className="border-b border-gray-300 pb-4">
-              <h3 className="text-lg font-bold text-blue-600 flex items-center space-x-2">
-                🔵 <span>{result.title}</span>
-              </h3>
-              <p className="text-gray-600 mt-1 italic">{result.snippet}</p>
-              <div className="flex space-x-2 mt-2">
-                {result.tags.split("|").map((tag, i) => (
-                  tag && (
-                    <span
-                      key={i}
-                      className="bg-yellow-200 text-yellow-700 text-xs font-semibold px-2 py-1 rounded-full flex items-center space-x-1"
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger>
+                    <a
+                      href={`https://stackoverflow.com/questions/${result.doc_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-lg font-bold text-blue-600 flex items-center space-x-2 hover:underline"
                     >
-                      ✏️ {tag}
-                    </span>
-                  )
-                ))}
+                      🔵 <span>{result.title}</span>
+                    </a>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="bg-gray-600 text-white p-2 rounded">
+                      Go to the Stack Overflow page
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+
+              <p className="text-gray-600 mt-1 italic">{result.body}</p>
+              <div className="flex space-x-2 mt-2">
+                {result.tags.split("|").map(
+                  (tag, i) =>
+                    tag && (
+                      <span
+                        key={i}
+                        className="bg-yellow-200 text-yellow-700 text-xs font-semibold px-2 py-1 rounded-full flex items-center space-x-1"
+                      >
+                        ✏️ {tag}
+                      </span>
+                    )
+                )}
               </div>
               <div className="flex items-center space-x-6 mt-2 text-gray-500 text-sm">
-                <span className="flex items-center space-x-1">
+                <span
+                  className={`flex items-center space-x-1 ${
+                    result.score >= 0 ? "text-green-600" : "text-red-600"
+                  }`}
+                >
                   <ThumbsUp size={16} />
-                  <span>{result.favorite_count} upvotes</span>
+                  <span>
+                    {result.score >= 0 ? `+${result.score}` : result.score}{" "}
+                    upvotes
+                  </span>
                 </span>
-                <span className="flex items-center space-x-1">
+                <span className="flex items-center space-x-1 text-[#6B7280]">
                   <Eye size={16} />
                   <span>{result.view_count} views</span>
                 </span>
-                <span className="flex items-center space-x-1">
+                <span className="flex items-center space-x-1 text-[#A855F7]">
                   <MessageSquare size={16} />
                   <span>{result.comment_count} comments</span>
+                </span>
+                <span className="flex items-center space-x-1 text-[#F97316]">
+                  <Star size={16} />
+                  <span>{result.favorite_count} favorites</span>
                 </span>
               </div>
             </div>

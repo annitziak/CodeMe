@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class Reranker:
-    def __init__(self, do_rerank_lm=True):
+    def __init__(self, do_rerank_lm=False):
         self.metadata = None
         self.load()
         self.tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")

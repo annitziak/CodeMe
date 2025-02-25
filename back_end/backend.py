@@ -3,7 +3,6 @@ from back_end.search import load_backend
 from retrieval_models.retrieval_functions import *
 
 app = Flask(__name__)
-search_module = load_backend(".cache/index-1m-custom-metadata")
 
 IDX_TO_ITEM = {
     0: "doc_id",
@@ -78,10 +77,10 @@ def search():
         400: Bad Request
         500: Internal Server Error
     """
-    query = request.form.get("query")  # Extract query
-    filters = request.form.getlist("filters")  # Extract multiple filter values
-    page = request.form.get("page", 0)  # Extract page number
-    page_size = request.form.get("page_size", 20)  # Extract page size
+    query = request.args.get("query")  # Extract query
+    filters = request.args.getlist("filters")  # Extract multiple filter values
+    page = request.args.get("page", 0)  # Extract page number
+    page_size = request.args.get("page_size", 20)  # Extract page size
 
     result = search_module.search(query)
     result = reorder_as_per_filter(result, filters)  # Apply filters
@@ -141,10 +140,10 @@ def advanced_search():
         400: Bad Request
         500: Internal Server Error
     """
-    query = request.form.get("query")  # Extract query
-    filters = request.form.getlist("filters")  # Extract multiple filter values
-    page = request.form.get("page", 0)  # Extract page number
-    page_size = request.form.get("page_size", 20)  # Extract page size
+    query = request.args.get("query")  # Extract query
+    filters = request.args.getlist("filters")  # Extract multiple filter values
+    page = request.args.get("page", 0)  # Extract page number
+    page_size = request.args.get("page_size", 20)  # Extract page size
 
     result = search_module.advanced_search(query)
     result = reorder_as_per_filter(result, filters)
@@ -198,4 +197,14 @@ def QueryResult(result):
 
 # main driver function
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=True)  # ✅ Enable debug mode
+    import multiprocessing
+
+    # Required for Windows
+    multiprocessing.freeze_support()
+
+    # Load backend safely
+    search_module = load_backend(r"C:\Users\DELL\Documents\GitHub\ttds_assignment\back_end\.cache\index-1m-doc-title-body")
+
+    # Start Flask app
+    app.run(host="0.0.0.0", port=8080)
+
