@@ -79,22 +79,19 @@ def search():
     """
     query = request.args.get("query")  # Extract query
     filters = request.args.getlist("filters")  # Extract multiple filter values
-    page = request.args.get("page", 0)  # Extract page number
-    page_size = request.args.get("page_size", 20)  # Extract page size
+    page = int(request.args.get("page", 0))  # Extract page number
+    page_size = int(request.args.get("page_size", 20))  # Extract page size
 
-    result = search_module.search(query)
+    result = search_module.search(query, page=page, page_size=page_size)  # Search
     result = reorder_as_per_filter(result, filters)  # Apply filters
-
-    has_next = False
-    has_prev = False
 
     return jsonify(
         {
             "result": result.results,
             "page": page,
             "page_size": page_size,
-            "has_next": has_next,
-            "has_prev": has_prev,
+            "has_next": result.has_next,
+            "has_prev": result.has_prev,
             "total_results": result.total_results,
         }
     ), 200
@@ -142,23 +139,21 @@ def advanced_search():
     """
     query = request.args.get("query")  # Extract query
     filters = request.args.getlist("filters")  # Extract multiple filter values
-    page = request.args.get("page", 0)  # Extract page number
-    page_size = request.args.get("page_size", 20)  # Extract page size
+    page = int(request.args.get("page", 0))  # Extract page number
+    page_size = int(request.args.get("page_size", 20))  # Extract page size
 
-    result = search_module.advanced_search(query)
+    result = search_module.advanced_search(query, page=page, page_size=page_size)
     result = reorder_as_per_filter(result, filters)
 
-    has_next = False
-    has_prev = False
     total_results = result.total_results
 
     return jsonify(
         {
-            "result": result.result,
+            "result": result.results,
             "page": page,
             "page_size": page_size,
-            "has_next": has_next,
-            "has_prev": has_prev,
+            "has_next": result.has_next,
+            "has_prev": result.has_prev,
             "total_results": total_results,
         }
     ), 200
@@ -199,12 +194,10 @@ def QueryResult(result):
 if __name__ == "__main__":
     import multiprocessing
 
-    # Required for Windows
-    multiprocessing.freeze_support()
+    # ENABLE ON WINDOWS IF USING MULTIPROCESSING
+    # multiprocessing.freeze_support()
+    multiprocessing.set_start_method("spawn")
 
-    # Load backend safely
     search_module = load_backend(r"C:\Users\DELL\Documents\GitHub\ttds_assignment\back_end\.cache\index-1m-doc-title-body")
-
-    # Start Flask app
     app.run(host="0.0.0.0", port=8080)
 

@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 class Reranker:
     def __init__(self, do_rerank_lm=False):
         self.metadata = None
-        self.load()
         self.tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
         self.model = AutoModel.from_pretrained("microsoft/codebert-base")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
