@@ -142,8 +142,6 @@ def advanced_search():
     page = int(request.args.get("page", 0))  # Extract page number
     page_size = int(request.args.get("page_size", 20))  # Extract page size
 
-    logger.info(f"Received args: {request.args}")
-
     result = search_module.advanced_search(query, page=page, page_size=page_size)
     result = reorder_as_per_filter(result, filters)
 
