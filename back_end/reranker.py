@@ -3,6 +3,8 @@ import os
 import pickle
 import logging
 
+from semantic_search.embedded_search import EmbeddingSearchIndex
+from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModel
 from scipy.spatial.distance import cosine
 
@@ -10,15 +12,31 @@ logger = logging.getLogger(__name__)
 
 
 class Reranker:
-    def __init__(self, do_rerank_lm=True):
+    def __init__(
+        self,
+        do_rerank_lm=True,
+        load_dir=".cache/doc_embeddings",
+        pretrained_model_name_or_path="sentence-transformers/all-MiniLM-L6-v2",
+    ):
         self.metadata = None
-        self.tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
-        self.model = AutoModel.from_pretrained("microsoft/codebert-base")
+        if "sentence-transformers" in pretrained_model_name_or_path:
+            self.model = SentenceTransformer(pretrained_model_name_or_path)
+        else:
+            self.tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
+            self.model = AutoModel.from_pretrained("microsoft/codebert-base")
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = self.model.to(self.device)
 
         self.do_rerank_lm = do_rerank_lm
-        self.lm_documents = self.load() if self.do_rerank_lm else {}
+        self.load_dir = load_dir
+
+        h5_path = os.path.join(self.load_dir, "embeddings.h5")
+        metadata_path = os.path.join(self.load_dir, "metadata.pkl")
+        faiss_path = os.path.join(self.load_dir, "faiss_cosine.index")
+        self.lm_documents = EmbeddingSearchIndex(h5_path, metadata_path).build_index(
+            faiss_path
+        )
 
     def load(self):
         file_path_1 = os.path.join("retrieval_models", "data", "half_1.pkl")
@@ -56,6 +74,8 @@ class Reranker:
     def rerank_lm(self, retrieved_documents, query):
         "rerank the top retrieved documents based on language model"
         # lm_queries is doc_id : encoded query
+        if isinstance(self.model, SentenceTransformer):
+            return self.rerank_lm_sentence_transformer(retrieved_documents, query)
 
         # Encode the query
         encoded_query_tokenized = self.tokenizer(
@@ -89,6 +109,24 @@ class Reranker:
 
         # Sort documents by similarity (higher is better)
         reranked_documents.sort(key=lambda x: x["lm_score"], reverse=True)
+
+        # Return only document IDs in sorted order
+        return reranked_documents
+
+    def rerank_lm_sentence_transformer(self, retrieved_documents, query):
+        "rerank the top retrieved documents based on language model using sentence transformer"
+        # Encode the query
+        encoded_query = self.model.encode(query, convert_to_tensor=True).cpu()
+        doc_map = {doc["doc_id"]: doc for doc in retrieved_documents}
+        doc_ids = [x["doc_id"] for x in retrieved_documents]
+        reranked_documents = self.lm_documents.search_filtered(
+            encoded_query, doc_ids, k=len(retrieved_documents)
+        )
+
+        # Sort documents by similarity (higher is better)
+        reranked_documents.sort(key=lambda x: x["lm_score"], reverse=True)
+        for idx, doc in enumerate(reranked_documents):
+            doc.update(doc_map[doc["doc_id"]])
 
         # Return only document IDs in sorted order
         return reranked_documents

@@ -285,7 +285,7 @@ class TermCache:
             self.cache.popitem(last=False)
 
         if term_obj.document_frequency > self.freq_threshold:
-            self.cache[(term, positions)] = term
+            self.cache[(term, positions)] = term_obj
 
 
 class DocLengthCache:
@@ -399,7 +399,7 @@ class ShardWorker:
         shard: int,
         offset: int = -1,
         pos_offset=-1,
-        limit=100_000,
+        limit=10_000,
         positions=False,
     ):
         start = time.time()
@@ -952,9 +952,10 @@ class OnDiskIndex(IndexBase):
             positions (bool): Whether to include positions in the term object
         """
         cached_term = self.term_cache.get(term, positions=positions)
-        logger.info(f"Term {term} not found in cache")
         if cached_term is not None:
             return cached_term
+
+        logger.info(f"Term {term} not found in cache")
 
         start = time.time()
         results = []
@@ -984,7 +985,6 @@ class OnDiskIndex(IndexBase):
         logger.info(
             f"GET TERM: time taken: {time.time() - start} with positions={positions}"
         )
-        print(f"GET TERM: time taken: {time.time() - start} with positions={positions}")
 
         return ret_term
 

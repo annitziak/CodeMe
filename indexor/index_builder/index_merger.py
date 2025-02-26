@@ -217,7 +217,7 @@ class IndexMerger:
                                 logger.error(
                                     f"Error reading {f_offset_filename} after length {len(term_offsets)} {e}"
                                 )
-                                break
+                                raise ValueError(f"Error reading {f_offset_filename}")
             else:
                 for item in term_offsets:
                     yield item
@@ -498,6 +498,7 @@ class IndexMerger:
 
             logger.error(f"Error merging {shard_files} {e}")
             logger.error(traceback.format_exc())
+            raise ValueError(f"Error merging {shard_files}")
 
         logger.debug(f"Unlocked {postings_file}")
         shutil.move(postings_file, postings_file.replace(".temp", ""))

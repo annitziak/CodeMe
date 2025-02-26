@@ -48,6 +48,8 @@ def search():
         options: dict[
             expansion: bool
             boost_terms: bool
+            rerank_metadata: bool [default: False]
+            rerank_lm: bool [default: False]
         ]
     Structure of the response:
         results: list[
@@ -82,7 +84,18 @@ def search():
     page = int(request.args.get("page", 0))  # Extract page number
     page_size = int(request.args.get("page_size", 20))  # Extract page size
 
-    result = search_module.search(query, page=page, page_size=page_size)  # Search
+    rerank_metadata = bool(request.args.get("rerank_metadata", True))
+    rerank_lm = bool(request.args.get("rerank_lm", True))
+
+    print(f"Page: {page}, Page Size: {page_size}")
+
+    result = search_module.search(
+        query,
+        page=page,
+        page_size=page_size,
+        rerank_lm=rerank_lm,
+        rerank_metadata=rerank_metadata,
+    )  # Search
     result = reorder_as_per_filter(result, filters)  # Apply filters
 
     return jsonify(
