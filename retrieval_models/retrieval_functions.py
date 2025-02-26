@@ -149,24 +149,6 @@ def boolean_search(query: str, index):
 
     return sorted(operands.pop()) if operands else []
 
-CLUSTER_MAPPING = {
-    "Programming and Development Fundamentals": {
-        "html", "javascript", "css", "php", "c", "c#", "ruby", "lisp", "python", 
-        "java", "regex", "xml", "mysql", "sql", "j#", "browser", "linq", "database", 
-        "unix", "sockets", "structuremap", "architecture", "forms", "aptana", 
-        "eclipse", "air", "linux", "memory", "svn"
-    },
-    "Data Science and AI": {
-        "machine-learning", "deep-learning", "tensorflow", "pytorch", "neural-networks", 
-        "nlp", "data-mining", "statistics", "pandas", "numpy", "scikit-learn"
-    },
-    "Web Development": {
-        "react", "angular", "vue", "django", "flask", "node.js", "express", "graphql", 
-        "webpack", "bootstrap", "tailwind"
-    },
-    # Add more clusters here...
-}
-
 def reorder_as_date(result):
     # Extract metadata and store with original results
     results_with_date = []
@@ -204,7 +186,7 @@ def parse_clusters_from_file(file_path):
                 continue  # Skip empty lines
 
             # Check if the line starts with a cluster header
-            cluster_match = re.match(r"🚀 Cluster (\d+) \(\d+ tags\): (.+)", line)
+            cluster_match = re.match(r"Cluster (\d+) \(\d+ tags\): (.+)", line)
             if cluster_match:
                 cluster_id = int(cluster_match.group(1))
                 cluster_name = CLUSTER_MAPPINGS.get(cluster_id)
@@ -240,17 +222,6 @@ def reorder_as_tag(result, selected_clusters):
             results_with_tags.append(doc_result)
 
     return results_with_tags
-
-
-
-
-
-
-
-
-
-
-
 
 def retrieval_function(query, index, embedding_model=None, expansion=False, k=50):
     """
