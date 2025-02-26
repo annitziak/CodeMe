@@ -53,7 +53,7 @@ def load_backend(index_path):
     embedding_model = EmbeddingModel(
         vocab=None,
         vocab_fn=index.get_vocab,
-        save_path="retrieval_models/data/embedding.pkl",
+        save_path="retrieval_models/data/embedding2.pkl",
     )
     reranker = Reranker(load_dir="/media/seanleishman/Disk/embeddings_v2")
 
@@ -140,7 +140,7 @@ class Search:
         )
 
         start_idx = page * page_size
-        end_idx = start_idx + page_size
+        end_idx = start_idx + page_size * 10
 
         results = results[start_idx:end_idx]
         if end_idx < total_results:
@@ -162,6 +162,7 @@ class Search:
             )
             logger.info(f"Reranked with LM: {return_result}")
 
+        return_result.results = return_result.results[:page_size]
         return return_result
 
     def search(
@@ -205,17 +206,10 @@ class Search:
         self, query, expansion=False, boost_terms=True, k=10, page=0, page_size=20
     ):
         start = time.time()
-        tokens = self.preprocessor.preprocess(query, return_words=True)
+        query = BooleanQuery(query, preprocessor=self.preprocessor)
+        query.parse()
+        print(f"Query after preprocessing: \n{query._ppformat()}")
 
-        if expansion and self.embedding_model:
-            tokens = query_expansion(tokens, self.embedding_model, top_k=k)
-        if boost_terms:
-            tokens.extend([token for token in tokens if token in self.boosted_terms])
-
-        # Encompasses BooleanQuery, PhraseQuery and ProximityQuery
-        tokens = self._pre_search(query, expansion, boost_terms, k)
-
-        query = BooleanQuery(tokens)
         if query in self.cache:
             results = self.cache[query]
         else:
@@ -275,13 +269,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     search = load_backend(args.index_path)
+
+    while True:
+        query = input("Enter query: ")
+        results = search.advanced_search(query, expansion=False, boost_terms=True)
+
+        results = search.search(query, expansion=False, boost_terms=True)
+        print(results)
+
     search.search("hello world in python", expansion=False, boost_terms=True)
     search.search(
         "how good is python as a programming langauge. Does it do well for FindMax queries",
         expansion=False,
     )
-
-    while True:
-        query = input("Enter query: ")
-        results = search.search(query, expansion=False, boost_terms=True)
-        print(results)

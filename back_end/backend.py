@@ -211,5 +211,5 @@ if __name__ == "__main__":
     # multiprocessing.freeze_support()
     multiprocessing.set_start_method("spawn")
 
-    search_module = load_backend(".cache/index-1m-doc-title-body")
-    app.run(host="0.0.0.0", port=8080)
+    search_module = load_backend(".cache/index-doc-title-body-v2")
+    app.run(host="0.0.0.0", port=8088)

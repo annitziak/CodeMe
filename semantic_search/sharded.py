@@ -311,11 +311,12 @@ def setup_doc_generator():
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--save-dir", type=str, default=".cache")
     parser.add_argument("--index-dir", type=str, default=".cache/index")
+    parser.add_argument("--top-p", type=float, default=0.2)
     args = parser.parse_args()
 
     DB_PARAMS["database"] = args.db_name
     db_connection = DBConnection(DB_PARAMS)
-    top_p = 0.2
+    top_p = args.top_p
 
     parser = HTMLParserInterface()
     title_parser = DefaultParserInterface()

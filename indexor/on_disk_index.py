@@ -77,6 +77,7 @@ def process_posting_block(
     limit,
     postings_count,
 ):
+    limit = postings_count if limit == -1 else limit
     doc_ids = np.zeros(min(postings_count, limit), dtype=np.uint32)
     term_frequencies = np.zeros(min(postings_count, limit), dtype=np.uint32)
     position_counts = np.zeros(min(postings_count, limit), dtype=np.uint32)
@@ -281,7 +282,7 @@ class TermCache:
         return self.cache.get((term, positions), None)
 
     def put(self, term: str, term_obj, positions=False):
-        if len(self.cache) > 100:
+        if len(self.cache) > self.max_size:
             self.cache.popitem(last=False)
 
         if term_obj.document_frequency > self.freq_threshold:
@@ -290,8 +291,7 @@ class TermCache:
 
 class DocLengthCache:
     def __init__(self):
-        self.cache = {}
-
+        self.cache = OrderedDict()
         self.max_size = 1_000_000
 
     def get(self, doc_id: int):
@@ -330,9 +330,10 @@ class ShardWorker:
 
         self.term_fst = marisa_trie.BytesTrie()
         self.doc_fst = marisa_trie.BytesTrie()
+        self.max_doc_id = 78_254_177
 
-        self.doc_set = {}
         self.shard = -1
+        self.doc_set_mask = np.ones(self.max_doc_id, dtype=bool)
 
         self.term_fst.load(os.path.join(index_path, "terms.fst"))
         self.doc_fst.load(os.path.join(index_path, "docs.fst"))
@@ -379,6 +380,13 @@ class ShardWorker:
         self.avg_doc_length = sum_doc_length / self.doc_count
 
         """
+        self.min_doc_id = self.doc_bounds[str(shard)][0]
+        self.max_doc_id = self.doc_bounds[str(shard)][1]
+        self.doc_set_mask = np.ones(self.max_doc_id - self.min_doc_id, dtype=bool)
+        """
+        self.min_doc_id = 0
+
+        """
         for doc_id, value in self.doc_fst.items():
             if shard != self.shard:
                 continue
@@ -417,6 +425,7 @@ class ShardWorker:
         if offset == -1 or pos_offset == -1:
             return (
                 shard,
+                0,
                 np.array([], dtype=np.uint32),
                 np.array([], dtype=np.uint32),
                 [],
@@ -461,13 +470,13 @@ class ShardWorker:
         logger.info(f"Time taken: {time.time() - start} in shard {shard} for {term}")
         print(f"Time taken: {time.time() - start} in shard {shard} for {term}")
 
-        return shard, doc_ids, term_frequencies, all_positions
+        return shard, postings_count, doc_ids, term_frequencies, all_positions
 
     def _get_scored_search(
         self,
         query: FreeTextQuery,
         shard: int,
-        limit=100_000,
+        limit=1_000_000,
         k1=1.2,
         b=0.75,
     ):
@@ -484,14 +493,14 @@ class ShardWorker:
         all_doc_ids = set()
         term_info = {}
         for term in query.parsed_query:
-            _, doc_ids, term_frequencies, _ = self._get_term(
-                term, shard, -1, limit=limit
+            _, doc_freq, doc_ids, term_frequencies, _ = self._get_term(
+                term, shard, -1, limit=-1
             )
             if len(doc_ids) > 0:
                 term_info[term] = {
                     "doc_ids": doc_ids,
                     "term_frequencies": term_frequencies,
-                    "doc_freq": len(doc_ids),
+                    "doc_freq": doc_freq,
                 }
             all_doc_ids.update(doc_ids)
 
@@ -499,11 +508,13 @@ class ShardWorker:
             return []
 
         all_doc_ids_arr = np.array(list(all_doc_ids))
+        min_doc_id = np.min(all_doc_ids_arr)
+        max_doc_id = np.max(all_doc_ids_arr)
+        id_range = max_doc_id - min_doc_id + 1
+
         doc_lengths = np.array(
             [
-                self._get_document_metadata(doc_id, shard, -1, keys=["doc_length"])[
-                    "doc_length"
-                ]
+                self._get_document_metadata(doc_id, shard, -1, keys=["doc_length"])
                 for doc_id in all_doc_ids
             ]
         )
@@ -512,17 +523,22 @@ class ShardWorker:
             doc_ids = info["doc_ids"]
             doc_freq = info["doc_freq"]
 
+            in_range_mask = (doc_ids >= min_doc_id) & (doc_ids <= max_doc_id)
+            if not np.any(in_range_mask):
+                continue
+
             idf = np.log((self.doc_count - doc_freq + 0.5) / (doc_freq + 0.5))
 
-            doc_mask = np.isin(all_doc_ids_arr, doc_ids)
-            matching_positions = np.searchsorted(doc_ids, all_doc_ids_arr[doc_mask])
+            max_doc_id = np.max(np.concatenate([doc_ids, all_doc_ids_arr])) + 1
+            term_freq_lookup = np.zeros(id_range, dtype=np.float32)
+            term_freq_lookup[doc_ids - min_doc_id] = info["term_frequencies"]
 
-            term_frequencies = np.zeros(len(all_doc_ids_arr), dtype=np.int32)
-            term_frequencies[doc_mask] = info["term_frequencies"][matching_positions]
-            tf = (term_frequencies * (k1 + 1)) / (
-                term_frequencies
-                + k1 * (1 - b + b * (doc_lengths / self.avg_doc_length))
+            matched_term_freqs = term_freq_lookup[all_doc_ids_arr - min_doc_id]
+            numerator = matched_term_freqs * (k1 + 1)
+            denominator = matched_term_freqs + k1 * (
+                1 - b + b * (doc_lengths / self.avg_doc_length)
             )
+            tf = numerator / denominator
 
             scores += idf * tf
 
@@ -537,7 +553,7 @@ class ShardWorker:
     def _search(self, query: Query, shard: int = 0, limit=100_000):
         def _search_helper(query):
             if isinstance(query, TermQuery):
-                return self._get_term(query.query, shard, -1, limit=limit)
+                return self._get_term(query.query, shard, -1, limit=-1)
             elif isinstance(query, AND):
                 left = _search_helper(query.left)
                 right = _search_helper(query.right)
@@ -549,7 +565,7 @@ class ShardWorker:
 
                 return self._get_union([left, right], shard, [-1, -1])
             elif isinstance(query, NOT):
-                left = _search_helper(query.right)
+                left = _search_helper(query.left)
                 return self._get_complement(left)
             elif isinstance(query, PhraseQuery):
                 return self._prox_search(
@@ -584,7 +600,7 @@ class ShardWorker:
         if len(terms) == 1:
             return self._get_term(terms[0], shard, offset, limit=limit, positions=True)
 
-        _, doc_ids, term_frequencies, all_positions = self._get_intersection(
+        _, doc_freq, doc_ids, term_frequencies, all_positions = self._get_intersection(
             terms, shard, [-1] * len(terms), positions=True
         )
 
@@ -620,21 +636,27 @@ class ShardWorker:
             y for i, x in enumerate(all_positions) if valid_doc_mask[i] for y in x[0]
         ]
 
-        return 0, doc_ids, term_frequencies, positions
+        return 0, len(doc_ids), doc_ids, term_frequencies, positions
 
     def _get_complement(self, term: str | tuple[int, np.ndarray, np.ndarray]):
         if isinstance(term, str):
-            _, doc_ids, term_frequencies, _ = self._get_term(term, 0, -1, False)
+            _, doc_freq, doc_ids, term_frequencies, _ = self._get_term(
+                term, 0, -1, False
+            )
         else:
-            doc_ids, term_frequencies = term[1], term[2]
+            doc_freq, doc_ids, term_frequencies = term[1], term[2], term[3]
 
-        doc_set_arr = np.array(list(self.doc_set))
-        complement_mask = ~np.isin(doc_set_arr, doc_ids)
+        self.doc_set_mask[doc_ids - self.min_doc_id] = False
+        complement_doc_ids = np.where(self.doc_set_mask)[0]
+        self.doc_set_mask[doc_ids - self.min_doc_id] = True
 
-        complement_doc_ids = np.array(doc_set_arr)[complement_mask]
-        complement_term_frequencies = np.zeros(len(complement_doc_ids), dtype=np.int32)
-
-        return 0, complement_doc_ids, complement_term_frequencies, []
+        return (
+            0,
+            len(complement_doc_ids),
+            complement_doc_ids,
+            np.zeros(len(complement_doc_ids), dtype=np.uint),
+            [],
+        )
 
     def _get_intersection(
         self,
@@ -656,11 +678,16 @@ class ShardWorker:
                 continue
 
             if isinstance(term, str):
-                _, doc_ids, term_frequencies, all_positions = self._get_term(
+                _, doc_freq, doc_ids, term_frequencies, all_positions = self._get_term(
                     term, shard, offset, positions=positions
                 )
             else:
-                doc_ids, term_frequencies, all_positions = term[1], term[2], term[3]
+                doc_freq, doc_ids, term_frequencies, all_positions = (
+                    term[1],
+                    term[2],
+                    term[3],
+                    term[4],
+                )
 
             if intersection_mask is None or intersection_doc_ids is None:
                 intersection_mask = doc_ids
@@ -699,6 +726,7 @@ class ShardWorker:
 
         return (
             0,
+            len(intersection_doc_ids),
             intersection_doc_ids,
             intersection_term_frequencies,
             intersection_all_positions,
@@ -715,11 +743,11 @@ class ShardWorker:
         union_term_frequencies = None
         for term, offset in zip(terms, offsets):
             if isinstance(term, str):
-                _, doc_ids, term_frequencies, _ = self._get_term(
+                _, doc_freq, doc_ids, term_frequencies, _ = self._get_term(
                     term, shard, offset, False
                 )
             else:
-                doc_ids, term_frequencies = term[1], term[2]
+                doc_freq, doc_ids, term_frequencies = term[1], term[2], term[3]
 
             if union_mask is None:
                 union_mask = doc_ids
@@ -733,7 +761,7 @@ class ShardWorker:
                 union_term_frequencies, term_frequencies
             )
 
-        return 0, union_doc_ids, union_term_frequencies, []
+        return 0, len(union_doc_ids), union_doc_ids, union_term_frequencies, []
 
     def _get_document_metadata(
         self, doc_id: int, shard: int, offset: int, keys=["all"]
@@ -741,7 +769,7 @@ class ShardWorker:
         if keys[0] == "doc_length":
             doc_length = self.doc_length_cache.get(doc_id)
             if doc_length is not None:
-                return {"doc_length": doc_length}
+                return doc_length
 
         mmap = self.doc_mmaps.load(shard)[shard]
         doc_length = -1
@@ -760,7 +788,8 @@ class ShardWorker:
                 doc_length = _doc_length
 
         if offset != -1 and keys[0] == "doc_length" and len(keys) == 1:
-            return {"doc_length": doc_length}
+            self.doc_length_cache.put(doc_id, doc_length)
+            return doc_length
 
         mmap.seek(offset)
         if "all" in keys:
@@ -933,10 +962,14 @@ class OnDiskIndex(IndexBase):
         return fst
 
     def _build_term(self, term: Term, future, positions=False):
-        shard, doc_ids, term_frequencies, position_list = future.result()
+        shard, doc_freq, doc_ids, term_frequencies, position_list = future.result()
         start = time.time()
         term.update_with_term(
-            doc_ids, term_frequencies, position_list, positions=positions
+            doc_ids,
+            term_frequencies,
+            position_list,
+            positions=positions,
+            doc_freq=doc_freq,
         )
         logger.info(
             f"Shard {shard} updated term {term.term} with {len(doc_ids)} in {time.time() - start} seconds"
@@ -1016,11 +1049,12 @@ class OnDiskIndex(IndexBase):
                 self.worker_pool[shard].submit(worker_search, query, shard, limit)
             )
 
-        ret_term = Term(query.__str__())
+        scores = []
         for future in futures:
-            ret_term = self._build_term(ret_term, future)
+            res = future.result()
+            scores.extend([(0, x) for x in res[2]])
 
-        return ret_term
+        return scores
 
     def get_term_by_prefix(self, prefix: str, positions=False) -> Term:
         """

@@ -367,7 +367,11 @@ class Term:
         term_frequencies: list[int],
         position_lists: list[list[int]],
         positions=False,
+        doc_freq: int = 0,
     ):
+        if doc_freq == 0:
+            doc_freq = len(doc_ids)
+
         t_start = time.time()
 
         doc_ids = np.asarray(doc_ids, dtype=np.uint32)
@@ -417,7 +421,7 @@ class Term:
         t_end = time.time()
 
         self.posting_lists.extend(add_posting_lists)
-        self.document_frequency += len(doc_ids)
+        self.document_frequency += doc_freq
         print(
             "Time to construct posting lists:",
             t_end - t_start,

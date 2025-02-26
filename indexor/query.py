@@ -20,7 +20,7 @@ class Query:
         print(self.ppformat(level=level))
 
     def ppformat(self, level=0):
-        return " " * level + self.query
+        return " " * level + self.query + "\n"
 
     def __str__(self):
         return self.ppformat()
@@ -117,8 +117,8 @@ class AND:
 
     def ppformat(self, level=0):
         out = self.left.ppformat(level + 1)
-        out += print(" " * level + "AND")
-        out += self.right.ppformt(level + 1)
+        out += " " * level + "AND" + "\n"
+        out += self.right.ppformat(level + 1)
 
         return out
 
@@ -133,7 +133,7 @@ class OR:
 
     def ppformat(self, level=0):
         out = self.left.ppformat(level + 1)
-        out += " " * level + "OR"
+        out += " " * level + "OR" + "\n"
         out += self.right.ppformat(level + 1)
 
         return out
@@ -149,7 +149,7 @@ class NOT:
 
     def ppformat(self, level=0):
         out = self.left.ppformat(level + 1)
-        out += " " * level + "NOT"
+        out += " " * level + "NOT" + "\n"
         if self.right:
             out += self.right.ppformat(level + 1)
 
@@ -223,7 +223,7 @@ class BooleanQuery(Query):
     def __str__(self):
         return self.__repr__()
 
-    def ppformat(self):
+    def _ppformat(self, level=0):
         if self.operands:
             out = self.operands[0].ppformat()
         else:
