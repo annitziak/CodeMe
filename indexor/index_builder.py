@@ -36,6 +36,8 @@ class IndexBuilder:
         action: str = "build",
         is_sharded=False,
         tokenizer_type: str = "split-variables",
+        min_bound=-1,
+        max_bound=-1,
     ) -> None:
         """
         Args:
@@ -77,6 +79,9 @@ class IndexBuilder:
             parser_kwargs={"parser_type": "html"},
             tokenizer_kwargs=self.tokenizer_kwargs,
         )
+
+        self.min_bound = min_bound
+        self.max_bound = max_bound
 
         self.debug = debug
         self.config = {
@@ -129,7 +134,9 @@ class IndexBuilder:
         logger.info("Building index")
 
         with self.db_connection as conn:
-            min_id, max_id, num_posts = self._get_id_stats(conn)
+            min_id, max_id, num_posts = self._get_id_stats(
+                conn, self.min_bound, self.max_bound
+            )
             logger.info(
                 f"Retrieved post stats: min_id={min_id}, max_id={max_id}, num_posts={num_posts}"
             )
@@ -259,9 +266,9 @@ class IndexBuilder:
             select_query = f"""SELECT
             id, title, body, creationdate, score, viewcount, owneruserid, ownerdisplayname, tags, answercount, commentcount, favoritecount, acceptedanswerid
             FROM posts
-            WHERE id >= {start} AND id <= {end} AND posttypeid = 1
+            WHERE id >= {start} AND id <= {end}
             ORDER BY id ASC
-            {debug}"""
+            {debug}"""  # AND posttypeid = 1
             cur.execute(select_query)
             logger.info(
                 "Processing shard %d: %d-%d with query %s",
@@ -389,7 +396,7 @@ class IndexBuilder:
         else:
             raise ValueError(f"Invalid field: {field}")
 
-    def _get_id_stats(self, conn):
+    def _get_id_stats(self, conn, min_bound=-1, max_bound=-1):
         """
         Get the min and max post IDs and the total number of posts in the database.
 
@@ -405,10 +412,19 @@ class IndexBuilder:
         min_id, max_id = conn.cur.fetchone()
 
         # estimate the number of posts (COUNT(*) is slow)
-        conn.execute(
-            "SELECT reltuples AS estimate FROM pg_class WHERE relname = 'posts';"
-        )
-        num_posts = conn.cur.fetchone()[0]
+        if min_bound < 0 and max_bound < 0:
+            conn.execute(
+                "SELECT reltuples AS estimate FROM pg_class WHERE relname = 'posts';"
+            )
+            num_posts = conn.cur.fetchone()[0]
+        else:
+            conn.execute(
+                f"SELECT COUNT(*) FROM posts WHERE id BETWEEN {min_bound} AND {max_bound}"
+            )
+            num_posts = conn.cur.fetchone()[0]
+
+        min_id = max(min_id, min_bound) if min_bound > 0 else min_id
+        max_id = min(max_id, max_bound) if max_bound > 0 else max_id
 
         return min_id, max_id, num_posts
 
@@ -486,9 +502,14 @@ class IndexBuilder:
         )
 
         partition_query = f"""
-            WITH rows AS (
+             WITH bounded_posts AS (
+            SELECT id
+            FROM posts
+            WHERE id BETWEEN {min_id} AND {max_id}
+        ),
+            rows AS (
                 SELECT id, ROW_NUMBER() OVER (ORDER BY id) as row_num
-                FROM posts
+                FROM bounded_posts
             )
             SELECT MIN(id) as shard_start, MAX(id) as shard_end
             FROM (
@@ -514,6 +535,8 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=24)
     parser.add_argument("--db-name", type=str, default="stack_overflow_10k")
+    parser.add_argument("--min-bound", type=int, default=-1)
+    parser.add_argument("--max-bound", type=int, default=-1)
     parser.add_argument(
         "--action",
         choices=["build", "merge", "build-fst"],
@@ -544,6 +567,8 @@ if __name__ == "__main__":
         num_workers=args.num_workers,
         action=args.action,
         is_sharded=args.is_sharded,
+        min_bound=args.min_bound,
+        max_bound=args.max_bound,
     )
     builder.process_posts()
     index = Index(load_path=args.index_path)

@@ -9,5 +9,8 @@ class SearchResult:
     total_results: int
     query: str
 
+    has_next: bool = False
+    has_prev: bool = False
+
     def __str__(self):
         return f"Search Result(\n\tresults={self.results[:5]}\n\ttime_taken={self.time_taken}\n\ttotal_results={self.total_results}\n\tquery={self.query}\n)"

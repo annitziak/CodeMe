@@ -149,6 +149,7 @@ def read_doc(
             logger.error(f"Doc Body: {raw_body_size}")
             logger.error(f"Doc Body: {body}")
             logger.error(traceback.format_exc())
+            raise ValueError("Error reading doc")
 
         docs_offset[int(doc_id)] = (shard_f.tell(), doc_length)
 

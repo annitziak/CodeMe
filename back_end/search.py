@@ -55,7 +55,7 @@ def load_backend(index_path):
         vocab_fn=index.get_vocab,
         save_path="retrieval_models/data/embedding.pkl",
     )
-    reranker = Reranker()
+    reranker = Reranker(load_dir="/media/seanleishman/Disk/embeddings_v2")
 
     return Search(index, preprocessor, embedding_model, reranker)
 
@@ -275,14 +275,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     search = load_backend(args.index_path)
-    search.search("hello world in python", expansion=False, boost_terms=True, k=10)
+    search.search("hello world in python", expansion=False, boost_terms=True)
     search.search(
         "how good is python as a programming langauge. Does it do well for FindMax queries",
         expansion=False,
-        k=10,
     )
 
     while True:
         query = input("Enter query: ")
-        results = search.search(query, expansion=False, boost_terms=True, k=10)
+        results = search.search(query, expansion=False, boost_terms=True)
         print(results)
