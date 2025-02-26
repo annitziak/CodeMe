@@ -38,6 +38,7 @@ const ResultsPage = () => {
       page: initialPage,
       page_size: pageSize,
       searchType: isAdvancedSearch ? "advanced" : "regular",
+      filters: selectedFilters,
     },
     { skip: !query }
   );
@@ -46,7 +47,7 @@ const ResultsPage = () => {
     if (query.trim()) {
       refetch();
     }
-  }, [query, searchParams, refetch]);
+  }, [query, searchParams, selectedFilters, refetch]);
 
   const handleSearch = () => {
     if (query.trim()) {
@@ -85,7 +86,7 @@ const ResultsPage = () => {
         : [...prevFilters, filter]
     );
   };
-
+  console.log(selectedFilters, "selected filter");
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-[#F5F7FA] to-[#E0E7EE]">
       <div className="w-full max-w-6xl mx-auto mt-6 px-4 space-y-3 lg:space-y-0 lg:flex lg:items-center lg:space-x-6">
@@ -123,10 +124,11 @@ const ResultsPage = () => {
         </h3>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
           {[
-            "Machine Learning",
-            "General Programming",
-            "Distributed Computing",
-            "Text Mining",
+            "Programming & Development Fundamentals",
+            "Software Engineering & System Design",
+            "Advanced Computing & Algorithms",
+            "Technologies & Frameworks",
+            "Other",
           ].map((filter) => (
             <label key={filter} className="flex items-center space-x-2">
               <input
@@ -236,10 +238,11 @@ const ResultsPage = () => {
           </h3>
           <div className="mt-4 space-y-3">
             {[
-              "Machine Learning",
-              "General Programming",
-              "Distributed Computing",
-              "Text Mining",
+              "Programming & Development Fundamentals",
+              "Software Engineering & System Design",
+              "Advanced Computing & Algorithms",
+              "Technologies & Frameworks",
+              "Other",
             ].map((filter) => (
               <label key={filter} className="flex items-center space-x-2">
                 <input
