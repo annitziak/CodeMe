@@ -20,6 +20,8 @@ class EmbeddingSearchIndex:
         # Load metadata
         with open(metadata_path, "rb") as f:
             self.metadata = pickle.load(f)
+            self.doc_ids = self.metadata.get("document_ids", [])
+            self.doc_ids = {doc_id: i for i, doc_id in enumerate(self.doc_ids)}
             print(
                 f"Loaded metadata from {metadata_path} with |documents|={len(self.metadata.get('document_ids', []))}"
             )
@@ -135,13 +137,12 @@ class EmbeddingSearchIndex:
 
         valid_indicies = []
         doc_id_map = {}
-        doc_ids = self.metadata.get("document_ids", [])
 
         for doc_id in filter_doc_ids:
-            if doc_id not in doc_ids:
+            if doc_id not in self.doc_ids:
                 continue
 
-            idx = doc_ids.index(doc_id)
+            idx = self.doc_ids[doc_id]
             valid_indicies.append(idx)
             doc_id_map[len(valid_indicies) - 1] = doc_id
 
