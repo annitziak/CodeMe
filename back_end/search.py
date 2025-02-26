@@ -55,7 +55,7 @@ def load_backend(index_path):
         vocab_fn=index.get_vocab,
         save_path="retrieval_models/data/embedding.pkl",
     )
-    reranker = Reranker(load_dir="/media/seanleishman/Disk/embeddings_v2")
+    reranker = Reranker(load_dir="C:/Users/DELL/Documents/GitHub/ttds_assignment/back_end/.cache/embeddings")
 
     return Search(index, preprocessor, embedding_model, reranker)
 

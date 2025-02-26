@@ -5,11 +5,10 @@ export const searchApi = createApi({
   baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
   endpoints: (builder) => ({
     search: builder.query({
-      // Accept both query and searchType
-      query: ({ query, searchType }) => ({
+      query: ({ query, searchType, page = 0, page_size = 20 }) => ({
         url: searchType === "advanced" ? '/advanced_search' : '/search',
         method: 'GET',
-        params: { query },
+        params: { query, page, page_size },
       }),
     }),
   }),

@@ -18,7 +18,7 @@ export default function SearchPage() {
 
   return (
     <div className="flex flex-col h-screen justify-between bg-gradient-to-br from-[#F5F7FA] to-[#E0E7EE]">
-      <header className="py-3 px-6 text-gray-600 text-sm">About</header>
+      <header className="py-3 px-6 text-gray-600 text-sm"></header>
 
       <main className="flex flex-col items-center justify-center flex-grow text-center px-6 relative">
         {/* Background Icon */}
@@ -31,15 +31,14 @@ export default function SearchPage() {
           Find code snippets, solutions, and programming insights instantly.
         </p>
 
-        {/* Search Type Buttons */}
         <div className="flex space-x-4 mb-6">
           <Button
-            className={`px-4 py-2 rounded-full ${
+            className={`px-4 py-2 rounded-full w-32 ${
               !isAdvancedSearch ? "bg-blue-500 text-white" : "bg-gray-200 text-gray-700"
             }`}
             onClick={() => setIsAdvancedSearch(false)}
           >
-            Regular Search
+            Search
           </Button>
           <Button
             className={`px-4 py-2 rounded-full ${
@@ -51,7 +50,6 @@ export default function SearchPage() {
           </Button>
         </div>
 
-        {/* Search Input */}
         <div className="relative flex items-center bg-white shadow-md rounded-full w-full max-w-2xl px-4 py-2">
           <Search className="text-gray-400 mr-2" />
           <Input

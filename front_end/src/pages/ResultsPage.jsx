@@ -20,21 +20,25 @@ import {
 } from "lucide-react";
 
 const ResultsPage = () => {
-  const [searchParams, setSearchParams] = useSearchParams("python");
+  const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
 
   const initialQuery = decodeURIComponent(searchParams.get("query") || "");
+  const initialPage = parseInt(searchParams.get("page") || "0", 10);
+  const pageSize = 20;
+
   const [query, setQuery] = useState(initialQuery);
   const [selectedFilters, setSelectedFilters] = useState([]);
-  const [currentPage, setCurrentPage] = useState(1);
-  const resultsPerPage = 5;
 
-  // Determine if it's an advanced search based on the route
   const isAdvancedSearch = location.pathname.includes("advanced_search");
 
-  // Fetch search results using RTK Query with correct search type
   const { data, error, isLoading, refetch } = useSearchQuery(
-    { query, searchType: isAdvancedSearch ? "advanced" : "regular" },
+    {
+      query,
+      page: initialPage,
+      page_size: pageSize,
+      searchType: isAdvancedSearch ? "advanced" : "regular",
+    },
     { skip: !query }
   );
 
@@ -42,11 +46,11 @@ const ResultsPage = () => {
     if (query.trim()) {
       refetch();
     }
-  }, [query, refetch]);
+  }, [query, searchParams, refetch]);
 
   const handleSearch = () => {
     if (query.trim()) {
-      setSearchParams({ query: encodeURIComponent(query) });
+      setSearchParams({ query: encodeURIComponent(query), page: 0 });
       refetch();
     }
   };
@@ -56,12 +60,23 @@ const ResultsPage = () => {
     setSearchParams({});
   };
 
-  // Pagination logic
-  const indexOfLastResult = currentPage * resultsPerPage;
-  const indexOfFirstResult = indexOfLastResult - resultsPerPage;
-  const currentResults =
-    data?.result.slice(indexOfFirstResult, indexOfLastResult) || [];
-  const totalPages = Math.ceil((data?.result.length || 0) / resultsPerPage);
+  const handleNextPage = () => {
+    if (data?.has_next) {
+      setSearchParams({
+        query: encodeURIComponent(query),
+        page: data.page + 1,
+      });
+    }
+  };
+
+  const handlePrevPage = () => {
+    if (data?.has_prev) {
+      setSearchParams({
+        query: encodeURIComponent(query),
+        page: data.page - 1,
+      });
+    }
+  };
 
   const toggleFilter = (filter) => {
     setSelectedFilters((prevFilters) =>
@@ -73,11 +88,11 @@ const ResultsPage = () => {
 
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-[#F5F7FA] to-[#E0E7EE]">
-      <div className="w-full max-w-6xl mx-auto mt-6 flex items-center px-4 space-x-6">
-        <h1 className="text-3xl font-semibold text-blue-600 whitespace-nowrap">
+      <div className="w-full max-w-6xl mx-auto mt-6 px-4 space-y-3 lg:space-y-0 lg:flex lg:items-center lg:space-x-6">
+        <h1 className="text-3xl font-semibold text-blue-600 text-center lg:text-left">
           CodeMe
         </h1>
-        <div className="relative flex items-center bg-white shadow-md rounded-full w-[75%]">
+        <div className="relative flex items-center bg-white shadow-md rounded-full w-full lg:w-[75%]">
           <Search className="text-gray-400 ml-4" />
           <Input
             type="text"
@@ -101,11 +116,36 @@ const ResultsPage = () => {
         </div>
       </div>
 
+      <div className="w-full max-w-6xl mx-auto px-4 mt-4 lg:hidden">
+        <h3 className="text-lg font-bold text-gray-700 flex items-center space-x-2">
+          <Filter size={20} className="text-blue-500" />
+          <span>Filters</span>
+        </h3>
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {[
+            "Machine Learning",
+            "General Programming",
+            "Distributed Computing",
+            "Text Mining",
+          ].map((filter) => (
+            <label key={filter} className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={selectedFilters.includes(filter)}
+                onChange={() => toggleFilter(filter)}
+                className="h-4 w-4 text-blue-600"
+              />
+              <span className="text-gray-700 text-sm">{filter}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
       <div className="flex flex-grow w-full max-w-6xl mx-auto mt-10 grid grid-cols-3 gap-8 px-4 pb-7">
         <div className="col-span-2 space-y-6">
           {isLoading && <p>Loading results...</p>}
           {error && <p className="text-red-500">Error fetching results.</p>}
-          {currentResults.map((result, index) => (
+          {data?.result.map((result, index) => (
             <div key={index} className="border-b border-gray-300 pb-4">
               <TooltipProvider>
                 <Tooltip>
@@ -142,16 +182,9 @@ const ResultsPage = () => {
                 )}
               </div>
               <div className="flex items-center space-x-6 mt-2 text-gray-500 text-sm">
-                <span
-                  className={`flex items-center space-x-1 ${
-                    result.score >= 0 ? "text-green-600" : "text-red-600"
-                  }`}
-                >
+                <span className="flex items-center space-x-1 text-green-600">
                   <ThumbsUp size={16} />
-                  <span>
-                    {result.score >= 0 ? `+${result.score}` : result.score}{" "}
-                    upvotes
-                  </span>
+                  <span>{result.score} upvotes</span>
                 </span>
                 <span className="flex items-center space-x-1 text-[#6B7280]">
                   <Eye size={16} />
@@ -169,58 +202,55 @@ const ResultsPage = () => {
             </div>
           ))}
 
-          {/* Pagination */}
-          {data?.result.length > resultsPerPage && (
-            <div className="flex justify-between mt-auto pb-10">
-              <Button
-                className={`px-4 py-2 rounded-lg ${
-                  currentPage === 1
-                    ? "opacity-50 cursor-not-allowed"
-                    : "bg-blue-500 text-white hover:bg-blue-600"
-                }`}
-                disabled={currentPage === 1}
-                onClick={() => setCurrentPage((prev) => prev - 1)}
-              >
-                Previous
-              </Button>
-              <span className="text-gray-700">
-                Page {currentPage} of {totalPages}
-              </span>
-              <Button
-                className={`px-4 py-2 rounded-lg ${
-                  currentPage === totalPages
-                    ? "opacity-50 cursor-not-allowed"
-                    : "bg-blue-500 text-white hover:bg-blue-600"
-                }`}
-                disabled={currentPage === totalPages}
-                onClick={() => setCurrentPage((prev) => prev + 1)}
-              >
-                Next
-              </Button>
-            </div>
-          )}
+          <div className="flex justify-between mt-auto pb-10">
+            <Button
+              className={`px-4 py-2 rounded-lg ${
+                !data?.has_prev
+                  ? "opacity-50 cursor-not-allowed"
+                  : "bg-blue-500 text-white hover:bg-blue-600"
+              }`}
+              disabled={!data?.has_prev}
+              onClick={handlePrevPage}
+            >
+              Previous
+            </Button>
+            <span className="text-gray-700">Page {data?.page + 1}</span>
+            <Button
+              className={`px-4 py-2 rounded-lg ${
+                !data?.has_next
+                  ? "opacity-50 cursor-not-allowed"
+                  : "bg-blue-500 text-white hover:bg-blue-600"
+              }`}
+              disabled={!data?.has_next}
+              onClick={handleNextPage}
+            >
+              Next
+            </Button>
+          </div>
         </div>
 
-        {/* Filters */}
-        <div className="col-span-1">
+        <div className="col-span-1 hidden lg:block">
           <h3 className="text-lg font-bold text-gray-700 flex items-center space-x-2">
             <Filter size={20} className="text-blue-500" />
             <span>Filters</span>
           </h3>
           <div className="mt-4 space-y-3">
-            {["Python", "JavaScript", "Web Scraping", "Machine Learning"].map(
-              (filter) => (
-                <label key={filter} className="flex items-center space-x-2">
-                  <input
-                    type="checkbox"
-                    checked={selectedFilters.includes(filter)}
-                    onChange={() => toggleFilter(filter)}
-                    className="h-4 w-4 text-blue-600"
-                  />
-                  <span className="text-gray-700">{filter}</span>
-                </label>
-              )
-            )}
+            {[
+              "Machine Learning",
+              "General Programming",
+              "Distributed Computing",
+              "Text Mining",
+            ].map((filter) => (
+              <label key={filter} className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  checked={selectedFilters.includes(filter)}
+                  onChange={() => toggleFilter(filter)}
+                  className="h-4 w-4 text-blue-600"
+                />
+                <span className="text-gray-700">{filter}</span>
+              </label>
+            ))}
           </div>
         </div>
       </div>
