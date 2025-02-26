@@ -75,7 +75,7 @@ const ResultsPage = () => {
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-[#F5F7FA] to-[#E0E7EE]">
       <div className="w-full max-w-6xl mx-auto mt-6 flex items-center px-4 space-x-6">
         <h1 className="text-3xl font-semibold text-blue-600 whitespace-nowrap">
-          CodeMe {isAdvancedSearch ? "(Advanced Search)" : "(Regular Search)"}
+          CodeMe
         </h1>
         <div className="relative flex items-center bg-white shadow-md rounded-full w-[75%]">
           <Search className="text-gray-400 ml-4" />
