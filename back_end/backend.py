@@ -188,20 +188,14 @@ def retreival_function(query):
     return ["doc1", "doc2", "doc3"]
 
 
-def reorder_as_per_filter(result, filters):
+def reorder_as_per_filter(result, filters, selected_clusters=None):
     if "date" in filters:
         result = reorder_as_date(result)  # Reorder by date
 
-    if "tag" in filters:
-        result = reorder_as_tag(result)  # Reorder by tag
+    if "tag" in filters and selected_clusters:
+        result = reorder_as_tag(result, selected_clusters)  # Reorder by selected cluster names
 
     return result  # Return reordered results
-
-
-@app.route("/Queryresponse/<result>")
-def QueryResult(result):
-    return "%s" % result
-
 
 # main driver function
 if __name__ == "__main__":

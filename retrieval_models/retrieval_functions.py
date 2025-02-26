@@ -3,6 +3,7 @@ from collections import defaultdict
 import re
 from textblob import TextBlob
 import random
+from indexor.index import Index
 
 
 def preprocess_query(query: str) -> list:
@@ -148,6 +149,79 @@ def boolean_search(query: str, index):
 
     return sorted(operands.pop()) if operands else []
 
+def reorder_as_date(result):
+    # Extract metadata and store with original results
+    results_with_date = []
+    
+    for doc_result in result:
+        metadata = Index.get_document_metadata(doc_result[1])  # Assuming metadata returns a dict
+        creation_date = metadata.get("creationdate", 0)  # Default to 0 if key doesn't exist
+        results_with_date.append((creation_date, doc_result))
+    
+    # Sort by creation date
+    results_with_date.sort(key=lambda x: x[0])
+
+    # Extract the sorted results
+    sorted_results = [doc[1] for doc in results_with_date]
+    
+    return sorted_results
+
+# Mapping of cluster IDs to cluster names
+CLUSTER_MAPPINGS = {
+    1: "Programming & Development Fundamentals",
+    2: "Software Engineering & System Design",
+    3: "Advanced Computing & Algorithms",
+    4: "Technologies & Frameworks",
+    5: "Other"
+}
+
+def parse_clusters_from_file(file_path):
+    cluster_mapping = {cluster_name: set() for cluster_name in CLUSTER_MAPPINGS.values()}
+    current_cluster = None
+
+    with open(file_path, "r", encoding="utf-8") as file:
+        for line in file:
+            line = line.strip()
+            if not line:
+                continue  # Skip empty lines
+
+            # Check if the line starts with a cluster header
+            cluster_match = re.match(r"Cluster (\d+) \(\d+ tags\): (.+)", line)
+            if cluster_match:
+                cluster_id = int(cluster_match.group(1))
+                cluster_name = CLUSTER_MAPPINGS.get(cluster_id)
+                
+                if cluster_name:
+                    current_cluster = cluster_name
+                else:
+                    current_cluster = None  # Skip if the cluster ID is invalid
+            elif current_cluster:
+                # Add tags to the current cluster (split by commas)
+                tags = [tag.strip() for tag in line.split(",") if tag.strip()]
+                cluster_mapping[current_cluster].update(tags)
+
+    return cluster_mapping
+
+file_path = "/data/clusters_results.txt"
+CLUSTER_MAPPING = parse_clusters_from_file(file_path)
+
+def reorder_as_tag(result, selected_clusters):
+    # Create a set of allowed tags based on selected clusters
+    allowed_tags = set()
+    for cluster_name in selected_clusters:
+        allowed_tags.update(CLUSTER_MAPPING.get(cluster_name, set()))
+
+    results_with_tags = []
+    
+    for doc_result in result:
+        metadata = Index.get_document_metadata(doc_result[1])
+        tags = metadata.get("tags", "").split(",")  # Assuming tags are comma-separated
+        
+        # Check if any tag in the document belongs to the allowed set
+        if any(tag in allowed_tags for tag in tags):
+            results_with_tags.append(doc_result)
+
+    return results_with_tags
 
 def retrieval_function(query, index, embedding_model=None, expansion=False, k=50):
     """
