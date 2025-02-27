@@ -32,6 +32,9 @@ IDX_TO_ITEM = {
     "title": 11,
 }
 
+@app.route("/",methods=["GET"])
+def hello_world():
+    return "<h1>backend is running!!!</h1>"
 
 @app.route("/search", methods=["GET"])
 def search():
