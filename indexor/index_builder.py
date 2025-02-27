@@ -12,7 +12,7 @@ from indexor.structures import DocMetadata, Stat
 
 from preprocessing import CodeBlock, NormalTextBlock
 from preprocessing.preprocessor import Preprocessor
-from preprocessing.tokenizer import BuildTokenizer
+from preprocessing.tokenizer import BuildTokenizer, BuildNormalizer
 from utils.db_connection import DBConnection
 
 logging.basicConfig(
@@ -36,6 +36,7 @@ class IndexBuilder:
         action: str = "build",
         is_sharded=False,
         tokenizer_type: str = "split-variables",
+        normalizer_type: str = "default",
         min_bound=-1,
         max_bound=-1,
     ) -> None:
@@ -66,10 +67,14 @@ class IndexBuilder:
         self.is_sharded = is_sharded
 
         self.base_tokenizer_kwargs = BuildTokenizer(tokenizer_type)
+        self.base_normalizer_kwargs = BuildNormalizer(normalizer_type)
         self.tokenizer_kwargs = {
             "code_tokenizer_kwargs": self.base_tokenizer_kwargs,
             "text_tokenizer_kwargs": self.base_tokenizer_kwargs,
             "link_tokenizer_kwargs": self.base_tokenizer_kwargs,
+            "post_text_normalizer_operations": self.base_normalizer_kwargs,
+            "post_code_normalizer_operations": self.base_normalizer_kwargs,
+            "post_link_normalizer_operations": self.base_normalizer_kwargs,
         }
         print(self.tokenizer_kwargs)
         self.title_preprocessor = Preprocessor(
@@ -554,6 +559,12 @@ if __name__ == "__main__":
         type=str,
         choices=["keep-split-variables", "split-variables"],
         default="split-variables",
+    )
+    parser.add_argument(
+        "--normalizer-type",
+        type=str,
+        choices=["default", "no-stopwords"],
+        default="default",
     )
     args = parser.parse_args()
 

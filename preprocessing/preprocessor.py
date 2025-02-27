@@ -51,6 +51,9 @@ class Preprocessor:
         self.parser = BuildParser(**parser_kwargs)
         self.tokenizer = Tokenizer(**tokenizer_kwargs)
 
+    def __repr__(self):
+        return f"Preprocessor(parser={self.parser}, tokenizer={self.tokenizer})"
+
     def __call__(self, text, *args, **kwargs):
         return self.preprocess(text, *args, **kwargs)
 

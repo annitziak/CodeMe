@@ -8,7 +8,6 @@ from preprocessing.sub_tokenizers.main_tokenizer import (
     MainTokenizer,
     PunctuationHandler,
     DEFAULT_PUNCTUATION,
-    PUNCTUATION_DOT,
 )
 
 from preprocessing.normalizer import (
@@ -60,19 +59,26 @@ DEFAULT_PRE_TEXT_NORMALIZER_OPERATIONS = [
     UnicodeToAsciiNormalizer(),
 ]
 
+"""
+            PunctuationHandler(
+                punctuation=r"(\S+)\.(\S+)",
+                punctuation_behaviour="remove-split",
+            ),
+            PunctuationHandler(
+                punctuation=PUNCTUATION_DOT,
+                punctuation_behaviour="remove-split",
+            ),
+"""
+
 
 def BuildTokenizer(tokenizer_type: str):
     if tokenizer_type == "keep-split-variables":
         tokenizer_kwargs = DEFAULT_TOKENIZER_KWARGS
         tokenizer_kwargs["punctuation_handlers"] = [
             PunctuationHandler(
-                punctuation=r"(\S+)\.(\S+)",
-                punctuation_behaviour="keep-split",
-            ),
-            PunctuationHandler(
-                punctuation=PUNCTUATION_DOT,
+                punctuation=DEFAULT_PUNCTUATION,
                 punctuation_behaviour="remove-split",
-            ),
+            )
         ]
         tokenizer_kwargs["camel_case_behaviour"] = "keep-split"
         tokenizer_kwargs["snake_case_behaviour"] = "keep-split"
@@ -90,6 +96,18 @@ def BuildTokenizer(tokenizer_type: str):
         raise ValueError(f"Unknown tokenizer type: {tokenizer_type}")
 
     return tokenizer_kwargs
+
+
+def BuildNormalizer(normalizer_type: str):
+    normalizer_operations = DEFAULT_NORMALIZER_OPERATIONS
+    if normalizer_type == "no-stopwords":
+        normalizer_operations = [
+            LowerCaseNormalizer(),
+            StemmingNormalizer(),
+            UnicodeToAsciiNormalizer(),
+        ]
+
+    return normalizer_operations
 
 
 class Tokenizer:
@@ -116,6 +134,9 @@ class Tokenizer:
         self.post_text_normalizer = Normalizer(post_text_normalizer_operations)
         self.post_code_normalizer = Normalizer(post_code_normalizer_operations)
         self.post_link_normalizer = Normalizer(post_link_normalizer_operations)
+
+    def __repr__(self):
+        return f"Tokenizer(code_tokenizer={self.code_tokenizer}, text_tokenizer={self.text_tokenizer}, link_tokenizer={self.link_tokenizer}, post_text_normalizer={self.post_text_normalizer}, post_code_normalizer={self.post_code_normalizer}, post_link_normalizer={self.post_link_normalizer})"
 
     def __call__(self, *args, **kwargs):
         return self.tokenize(*args, **kwargs)

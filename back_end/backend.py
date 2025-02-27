@@ -205,11 +205,28 @@ def QueryResult(result):
 
 # main driver function
 if __name__ == "__main__":
-    import multiprocessing
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Search Engine")
+    parser.add_argument("--index-path", type=str, help="Path to load index")
+    parser.add_argument(
+        "--embedding-path",
+        type=str,
+        help="Path to load embeddings",
+        default="retrieval_models/data/embedding2.pkl",
+    )
+    parser.add_argument(
+        "--reranker-path",
+        type=str,
+        help="Path to load reranker embeddings",
+        default="/media/seanleishman/Disk/embeddings_v2",
+    )
+    args = parser.parse_args()
 
     # ENABLE ON WINDOWS IF USING MULTIPROCESSING
     # multiprocessing.freeze_support()
-    multiprocessing.set_start_method("spawn")
 
-    search_module = load_backend(".cache/index-doc-title-body-v2")
+    search_module = load_backend(
+        args.index_path, args.embedding_path, args.reranker_path
+    )
     app.run(host="0.0.0.0", port=8088)
