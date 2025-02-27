@@ -30,15 +30,14 @@ const ResultsPage = () => {
 
   const isAdvancedSearch = location.pathname.includes("advanced_search");
 
-  // GET request
+  // GET request (only skip if no query)
   const {
     data: getData,
     isLoading: getLoading,
     refetch,
-    isFetching,
   } = useSearchQuery(
     { query, page: initialPage, page_size: pageSize },
-    { skip: !query || usePostResults }
+    { skip: !query.trim() }
   );
 
   // POST request (triggered when filters are applied)
@@ -46,23 +45,25 @@ const ResultsPage = () => {
     useSearchWithFiltersMutation();
 
   useEffect(() => {
-    if (query.trim() && !isFetching) {
-      if (selectedFilters.length === 0 && !sortByDate) {
-        setUsePostResults(false);
-        refetch();
-      } else {
-        setUsePostResults(true);
-        searchWithFilters({
-          query,
-          page: initialPage,
-          page_size: pageSize,
-          searchType: isAdvancedSearch ? "advanced" : "regular",
-          filters: {
-            tags: selectedFilters,
-            date: sortByDate,
-          },
-        });
-      }
+    if (!query.trim()) return; // Prevent running if query is empty
+
+    // If no filters & not sorting by date, do GET refetch
+    if (selectedFilters.length === 0 && !sortByDate) {
+      setUsePostResults(false);
+      refetch();
+    } else {
+      // Otherwise, do POST
+      setUsePostResults(true);
+      searchWithFilters({
+        query,
+        page: initialPage,
+        page_size: pageSize,
+        searchType: isAdvancedSearch ? "advanced" : "regular",
+        filters: {
+          tags: selectedFilters,
+          date: sortByDate,
+        },
+      });
     }
   }, [
     query,
@@ -78,7 +79,7 @@ const ResultsPage = () => {
   const handleSearch = () => {
     if (query.trim()) {
       setSearchParams({ query: encodeURIComponent(query), page: 0 });
-      if (selectedFilters.length === 0) {
+      if (selectedFilters.length === 0 && !sortByDate) {
         setUsePostResults(false);
         refetch();
       } else {
@@ -90,6 +91,7 @@ const ResultsPage = () => {
           searchType: isAdvancedSearch ? "advanced" : "regular",
           filters: {
             tags: selectedFilters,
+            date: sortByDate,
           },
         });
       }
@@ -143,7 +145,6 @@ const ResultsPage = () => {
       });
     }
   };
-  console.log(selectedFilters, "selected filters");
 
   const handlePrevPage = () => {
     if (results?.has_prev) {
@@ -153,6 +154,8 @@ const ResultsPage = () => {
       });
     }
   };
+
+  console.log(selectedFilters, "selected filters");
 
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-[#F5F7FA] to-[#E0E7EE]">
@@ -184,6 +187,7 @@ const ResultsPage = () => {
         </div>
       </div>
 
+      {/* Mobile Filters */}
       <div className="w-full mt-4 lg:hidden px-3">
         <h3 className="text-lg font-bold text-gray-700 flex items-center space-x-2">
           <Filter size={20} className="text-blue-500" />
@@ -198,20 +202,26 @@ const ResultsPage = () => {
             "Other",
           ].map((filter) => (
             <label key={filter} className="flex items-center space-x-2">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={selectedFilters.includes(filter)}
-                onChange={() => {
-                  console.log(filter, "filter");
-                  toggleFilter(filter);
-                }}
-                className="text-blue-600"
+                onCheckedChange={() => toggleFilter(filter)}
               />
-              <span className="text-gray-700 text-sm">{filter}</span>
+              <span className="text-gray-700">{filter}</span>
             </label>
           ))}
         </div>
+        <div className="flex items-center space-x-2 mt-3">
+          <Checkbox
+            id="terms"
+            checked={sortByDate}
+            onCheckedChange={() => setSortByDate((prev) => !prev)}
+          />
+          <label htmlFor="terms" className="text-gray-700">
+            Sort by date
+          </label>
+        </div>
       </div>
+
       {isLoading ? (
         <p className="text-blue-500 text-center mt-5 text-3xl">
           Loading results...
@@ -240,7 +250,6 @@ const ResultsPage = () => {
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
-
                 <p className="text-gray-600 mt-1 italic">{result.body}</p>
                 <div className="flex space-x-2 mt-2">
                   {result.tags.split("|").map(
@@ -295,6 +304,7 @@ const ResultsPage = () => {
             </div>
           </div>
 
+          {/* Desktop Filters */}
           <div className="hidden lg:block">
             <h3 className="text-lg font-bold text-gray-700 flex items-center space-x-2">
               <Filter size={20} className="text-blue-500" />
