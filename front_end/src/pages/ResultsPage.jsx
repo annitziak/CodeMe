@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 import { useSearchParams, useLocation } from "react-router-dom";
-import { useSearchQuery } from "../features/searchApi";
+import {
+  useSearchQuery,
+  useSearchWithFiltersMutation,
+} from "../features/searchApi";
 import { Input } from "@/components/ui/input";
 import {
   Tooltip,
@@ -9,15 +12,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import {
-  Search,
-  X,
-  Eye,
-  MessageSquare,
-  ThumbsUp,
-  Filter,
-  Star,
-} from "lucide-react";
+import { Search, X, Eye, ThumbsUp, Filter } from "lucide-react";
 
 const ResultsPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -29,32 +24,107 @@ const ResultsPage = () => {
 
   const [query, setQuery] = useState(initialQuery);
   const [selectedFilters, setSelectedFilters] = useState([]);
+  const [usePostResults, setUsePostResults] = useState(false);
 
   const isAdvancedSearch = location.pathname.includes("advanced_search");
 
-  const { data, error, isLoading, refetch } = useSearchQuery(
-    {
-      query,
-      page: initialPage,
-      page_size: pageSize,
-      searchType: isAdvancedSearch ? "advanced" : "regular",
-      filters: selectedFilters,
-    },
-    { skip: !query }
+  // GET request
+  const {
+    data: getData,
+    isLoading: getLoading,
+    refetch,
+    isFetching,
+  } = useSearchQuery(
+    { query, page: initialPage, page_size: pageSize },
+    { skip: !query || usePostResults }
   );
 
+  // POST request (triggered when filters are applied)
+  const [searchWithFilters, { data: postData, isLoading: postLoading }] =
+    useSearchWithFiltersMutation();
+
   useEffect(() => {
-    if (query.trim()) {
-      refetch();
+    if (query.trim() && !isFetching) {
+      if (selectedFilters.length === 0) {
+        setUsePostResults(false);
+        refetch();
+      } else {
+        setUsePostResults(true);
+        searchWithFilters({
+          query,
+          page: initialPage,
+          page_size: pageSize,
+          searchType: isAdvancedSearch ? "advanced" : "regular",
+          filters: {
+            tags: selectedFilters,
+          },
+        });
+      }
     }
-  }, [query, searchParams, selectedFilters, refetch]);
+  }, [
+    query,
+    selectedFilters,
+    initialPage,
+    isAdvancedSearch,
+    pageSize,
+    refetch,
+    searchWithFilters,
+  ]);
 
   const handleSearch = () => {
     if (query.trim()) {
       setSearchParams({ query: encodeURIComponent(query), page: 0 });
-      refetch();
+      if (selectedFilters.length === 0) {
+        setUsePostResults(false);
+        refetch();
+      } else {
+        setUsePostResults(true);
+        searchWithFilters({
+          query,
+          page: 0,
+          page_size: pageSize,
+          searchType: isAdvancedSearch ? "advanced" : "regular",
+          filters: {
+            tags: selectedFilters,
+          },
+        });
+      }
     }
   };
+
+  const toggleFilter = (filter) => {
+    setSelectedFilters((prevFilters) => {
+      const newFilters = prevFilters.includes(filter)
+        ? prevFilters.filter((f) => f !== filter)
+        : [...prevFilters, filter];
+
+      console.log("Updated filters:", newFilters); // Debugging filter state
+
+      setUsePostResults(newFilters.length > 0);
+
+      // Wait for the state to update before making API calls
+      setTimeout(() => {
+        if (newFilters.length === 0) {
+          refetch();
+        } else {
+          searchWithFilters({
+            query,
+            page: initialPage,
+            page_size: pageSize,
+            searchType: isAdvancedSearch ? "advanced" : "regular",
+            filters: {
+              tags: newFilters,
+            },
+          });
+        }
+      }, 0);
+
+      return newFilters;
+    });
+  };
+
+  const results = usePostResults ? postData || [] : getData || [];
+  const isLoading = usePostResults ? postLoading : getLoading;
 
   const clearQuery = () => {
     setQuery("");
@@ -62,34 +132,27 @@ const ResultsPage = () => {
   };
 
   const handleNextPage = () => {
-    if (data?.has_next) {
+    if (results?.has_next) {
       setSearchParams({
         query: encodeURIComponent(query),
-        page: data.page + 1,
+        page: results.page + 1,
       });
     }
   };
+  console.log(selectedFilters, "selected filters");
 
   const handlePrevPage = () => {
-    if (data?.has_prev) {
+    if (results?.has_prev) {
       setSearchParams({
         query: encodeURIComponent(query),
-        page: data.page - 1,
+        page: results.page - 1,
       });
     }
   };
 
-  const toggleFilter = (filter) => {
-    setSelectedFilters((prevFilters) =>
-      prevFilters.includes(filter)
-        ? prevFilters.filter((f) => f !== filter)
-        : [...prevFilters, filter]
-    );
-  };
-  console.log(selectedFilters, "selected filter");
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-[#F5F7FA] to-[#E0E7EE]">
-      <div className="w-full max-w-6xl mx-auto mt-6 px-4 space-y-3 lg:space-y-0 lg:flex lg:items-center lg:space-x-6">
+      <div className="w-full mx-auto mt-6 px-12 space-y-3 lg:space-y-0 lg:flex lg:items-center lg:space-x-6">
         <h1 className="text-3xl font-semibold text-blue-600 text-center lg:text-left">
           CodeMe
         </h1>
@@ -117,7 +180,7 @@ const ResultsPage = () => {
         </div>
       </div>
 
-      <div className="w-full max-w-6xl mx-auto px-4 mt-4 lg:hidden">
+      <div className="w-full mt-4 lg:hidden px-3">
         <h3 className="text-lg font-bold text-gray-700 flex items-center space-x-2">
           <Filter size={20} className="text-blue-500" />
           <span>Filters</span>
@@ -134,129 +197,127 @@ const ResultsPage = () => {
               <input
                 type="checkbox"
                 checked={selectedFilters.includes(filter)}
-                onChange={() => toggleFilter(filter)}
-                className="h-4 w-4 text-blue-600"
+                onChange={() => {
+                  console.log(filter, "filter");
+                  toggleFilter(filter);
+                }}
+                className="text-blue-600"
               />
               <span className="text-gray-700 text-sm">{filter}</span>
             </label>
           ))}
         </div>
       </div>
-
-      <div className="flex flex-grow w-full max-w-6xl mx-auto mt-10 grid grid-cols-3 gap-8 px-4 pb-7">
-        <div className="col-span-2 space-y-6">
-          {isLoading && <p>Loading results...</p>}
-          {error && <p className="text-red-500">Error fetching results.</p>}
-          {data?.result.map((result, index) => (
-            <div key={index} className="border-b border-gray-300 pb-4">
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger>
-                    <a
-                      href={`https://stackoverflow.com/questions/${result.doc_id}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-lg font-bold text-blue-600 flex items-center space-x-2 hover:underline"
-                    >
-                      🔵 <span>{result.title}</span>
-                    </a>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="bg-gray-600 text-white p-2 rounded">
-                      Go to the Stack Overflow page
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-
-              <p className="text-gray-600 mt-1 italic">{result.body}</p>
-              <div className="flex space-x-2 mt-2">
-                {result.tags.split("|").map(
-                  (tag, i) =>
-                    tag && (
-                      <span
-                        key={i}
-                        className="bg-yellow-200 text-yellow-700 text-xs font-semibold px-2 py-1 rounded-full flex items-center space-x-1"
+      {isLoading ? (
+        <p className="text-blue-500 text-center mt-5 text-3xl">
+          Loading results...
+        </p>
+      ) : (
+        <div className="flex flex-grow w-full max-w-7xl mx-auto mt-10 gap-8 pb-7 px-4">
+          <div className="w-[90%]">
+            {results?.result?.map((result, index) => (
+              <div key={index} className="border-b border-gray-300 pb-4">
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger>
+                      <a
+                        href={`https://stackoverflow.com/questions/${result.doc_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-lg font-bold text-blue-600 flex items-center space-x-2 hover:underline"
                       >
-                        ✏️ {tag}
-                      </span>
-                    )
-                )}
-              </div>
-              <div className="flex items-center space-x-6 mt-2 text-gray-500 text-sm">
-                <span className="flex items-center space-x-1 text-green-600">
-                  <ThumbsUp size={16} />
-                  <span>{result.score} upvotes</span>
-                </span>
-                <span className="flex items-center space-x-1 text-[#6B7280]">
-                  <Eye size={16} />
-                  <span>{result.view_count} views</span>
-                </span>
-                <span className="flex items-center space-x-1 text-[#A855F7]">
-                  <MessageSquare size={16} />
-                  <span>{result.comment_count} comments</span>
-                </span>
-                <span className="flex items-center space-x-1 text-[#F97316]">
-                  <Star size={16} />
-                  <span>{result.favorite_count} favorites</span>
-                </span>
-              </div>
-            </div>
-          ))}
+                        🔵 <span>{result.title}</span>
+                      </a>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className="bg-gray-600 text-white p-2 rounded">
+                        Go to the Stack Overflow page
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
 
-          <div className="flex justify-between mt-auto pb-10">
-            <Button
-              className={`px-4 py-2 rounded-lg ${
-                !data?.has_prev
-                  ? "opacity-50 cursor-not-allowed"
-                  : "bg-blue-500 text-white hover:bg-blue-600"
-              }`}
-              disabled={!data?.has_prev}
-              onClick={handlePrevPage}
-            >
-              Previous
-            </Button>
-            <span className="text-gray-700">Page {data?.page + 1}</span>
-            <Button
-              className={`px-4 py-2 rounded-lg ${
-                !data?.has_next
-                  ? "opacity-50 cursor-not-allowed"
-                  : "bg-blue-500 text-white hover:bg-blue-600"
-              }`}
-              disabled={!data?.has_next}
-              onClick={handleNextPage}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
-
-        <div className="col-span-1 hidden lg:block">
-          <h3 className="text-lg font-bold text-gray-700 flex items-center space-x-2">
-            <Filter size={20} className="text-blue-500" />
-            <span>Filters</span>
-          </h3>
-          <div className="mt-4 space-y-3">
-            {[
-              "Programming & Development Fundamentals",
-              "Software Engineering & System Design",
-              "Advanced Computing & Algorithms",
-              "Technologies & Frameworks",
-              "Other",
-            ].map((filter) => (
-              <label key={filter} className="flex items-center space-x-2">
-                <input
-                  type="checkbox"
-                  checked={selectedFilters.includes(filter)}
-                  onChange={() => toggleFilter(filter)}
-                  className="h-4 w-4 text-blue-600"
-                />
-                <span className="text-gray-700">{filter}</span>
-              </label>
+                <p className="text-gray-600 mt-1 italic">{result.body}</p>
+                <div className="flex space-x-2 mt-2">
+                  {result.tags.split("|").map(
+                    (tag, i) =>
+                      tag && (
+                        <span
+                          key={i}
+                          className="bg-yellow-200 text-yellow-700 text-xs font-semibold px-2 py-1 rounded-full flex items-center space-x-1"
+                        >
+                          ✏️ {tag}
+                        </span>
+                      )
+                  )}
+                </div>
+                <div className="flex items-center space-x-6 mt-2 text-gray-500 text-sm">
+                  <span className="flex items-center space-x-1 text-green-600">
+                    <ThumbsUp size={16} />
+                    <span>{result.score} upvotes</span>
+                  </span>
+                  <span className="flex items-center space-x-1 text-[#6B7280]">
+                    <Eye size={16} />
+                    <span>{result.view_count} views</span>
+                  </span>
+                </div>
+              </div>
             ))}
+
+            <div className="flex justify-between mt-auto pb-10">
+              <Button
+                className={`px-4 py-2 rounded-lg ${
+                  !results?.has_prev
+                    ? "opacity-50 cursor-not-allowed"
+                    : "bg-blue-500 text-white hover:bg-blue-600"
+                }`}
+                disabled={!results?.has_prev}
+                onClick={handlePrevPage}
+              >
+                Previous
+              </Button>
+              <span className="text-gray-700">Page {results?.page + 1}</span>
+              <Button
+                className={`px-4 py-2 rounded-lg ${
+                  !results?.has_next
+                    ? "opacity-50 cursor-not-allowed"
+                    : "bg-blue-500 text-white hover:bg-blue-600"
+                }`}
+                disabled={!results?.has_next}
+                onClick={handleNextPage}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+
+          <div className="hidden lg:block">
+            <h3 className="text-lg font-bold text-gray-700 flex items-center space-x-2">
+              <Filter size={20} className="text-blue-500" />
+              <span>Filters</span>
+            </h3>
+            <div className="mt-4 space-y-3 col-span-2">
+              {[
+                "Programming & Development Fundamentals",
+                "Software Engineering & System Design",
+                "Advanced Computing & Algorithms",
+                "Technologies & Frameworks",
+                "Other",
+              ].map((filter) => (
+                <label key={filter} className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={selectedFilters.includes(filter)}
+                    onChange={() => toggleFilter(filter)}
+                    className="text-blue-600"
+                  />
+                  <span className="text-gray-700">{filter}</span>
+                </label>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
