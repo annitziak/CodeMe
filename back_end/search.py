@@ -43,7 +43,11 @@ BOOSTED_TERMS = {
 }
 
 
-def load_backend(index_path):
+def load_backend(
+    index_path,
+    embedding_path="retrieval_models/data/embedding2.pkl",
+    reranker_path="/media/seanleishman/Disk/embeddings_v2",
+):
     if index_path is None or not os.path.exists(index_path):
         logger.error(f"Index path {index_path} does not exist. Using mock data")
         return Search.mock()
@@ -53,7 +57,7 @@ def load_backend(index_path):
     embedding_model = EmbeddingModel(
         vocab=None,
         vocab_fn=index.get_vocab,
-        save_path="retrieval_models/data/embedding2.pkl",
+        save_path=embedding_path,
     )
     reranker = Reranker(load_dir="C:/Users/DELL/Documents/GitHub/ttds_assignment/back_end/.cache/embeddings")
 
@@ -140,7 +144,7 @@ class Search:
         )
 
         start_idx = page * page_size
-        end_idx = start_idx + page_size * 10
+        end_idx = start_idx + 500
 
         results = results[start_idx:end_idx]
         if end_idx < total_results:
@@ -162,7 +166,9 @@ class Search:
             )
             logger.info(f"Reranked with LM: {return_result}")
 
+        return_result.results = self.reranker.fuse_scores(return_result.results)
         return_result.results = return_result.results[:page_size]
+
         return return_result
 
     def search(
@@ -219,6 +225,8 @@ class Search:
             results,
             page=page,
             page_size=page_size,
+            rerank_metadata=True,
+            rerank_lm=False,
         )
 
         ret.time_taken = time.time() - start
@@ -232,6 +240,9 @@ class Search:
         ret = []
         for doc_result in results:
             metadata = self.index.get_document_metadata(doc_result[1])
+            if metadata is None:
+                continue
+
             ret.append(
                 {
                     "doc_id": to_py(doc_result[1]),
@@ -266,16 +277,29 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Search Engine")
     parser.add_argument("--index-path", type=str, help="Path to load index")
+    parser.add_argument(
+        "--embedding-path",
+        type=str,
+        help="Path to load embeddings",
+        default="retrieval_models/data/embedding2.pkl",
+    )
+    parser.add_argument(
+        "--reranker-path",
+        type=str,
+        help="Path to load reranker embeddings",
+        default="/media/seanleishman/Disk/embeddings_v2",
+    )
     args = parser.parse_args()
 
-    search = load_backend(args.index_path)
+    search = load_backend(args.index_path, args.embedding_path, args.reranker_path)
 
     while True:
         query = input("Enter query: ")
-        results = search.advanced_search(query, expansion=False, boost_terms=True)
 
         results = search.search(query, expansion=False, boost_terms=True)
         print(results)
+
+        results = search.advanced_search(query, expansion=False, boost_terms=True)
 
     search.search("hello world in python", expansion=False, boost_terms=True)
     search.search(

@@ -98,6 +98,69 @@ def process_posting_block(
     return offset, doc_ids, term_frequencies, position_counts
 
 
+@jit(nopython=True, cache=True, fastmath=True)
+def calculate_bm25_numba(
+    scores,
+    all_doc_ids_arr,
+    doc_ids,
+    term_frequencies,
+    doc_freq,
+    doc_lengths,
+    doc_count,
+    avg_doc_length,
+    min_doc_id,
+    id_range,
+    k1,
+    b,
+):
+    """
+    Numba-accelerated function to update BM25 scores for a single term
+    """
+    # Check if any documents for this term are in our range
+    in_range = False
+    for i in range(len(doc_ids)):
+        if min_doc_id <= doc_ids[i] <= min_doc_id + id_range - 1:
+            in_range = True
+            break
+
+    if not in_range:
+        return scores
+
+    # Calculate IDF component
+    doc_freq_float = float(doc_freq)
+    doc_count_float = float(doc_count)
+    idf = np.float32(
+        np.log((doc_count_float - doc_freq_float + 0.5) / (doc_freq_float + 0.5))
+    )
+
+    # Create term frequency lookup array
+    term_freq_lookup = np.zeros(id_range, dtype=np.float32)
+    for i in range(len(doc_ids)):
+        idx = doc_ids[i] - min_doc_id
+        if 0 <= idx < id_range:
+            term_freq_lookup[idx] = term_frequencies[i]
+
+    # Calculate BM25 components for each document
+    new_scores = np.zeros_like(scores)
+    for i in range(len(all_doc_ids_arr)):
+        doc_id = all_doc_ids_arr[i]
+        idx = doc_id - min_doc_id
+        if 0 <= idx < id_range:
+            tf = term_freq_lookup[idx]
+            if tf > 0:
+                doc_length = doc_lengths[i]
+                numerator = tf * (k1 + 1.0)
+                denominator = tf + k1 * (1.0 - b + b * (doc_length / avg_doc_length))
+                bm25_score = idf * (numerator / denominator)
+                new_scores[i] = scores[i] + bm25_score
+            else:
+                new_scores[i] = scores[i]
+        else:
+            new_scores[i] = scores[i]
+
+    return new_scores
+
+
 def _read_fst(
     fst,
     term: str | bytes,
@@ -330,9 +393,11 @@ class ShardWorker:
 
         self.term_fst = marisa_trie.BytesTrie()
         self.doc_fst = marisa_trie.BytesTrie()
-        self.max_doc_id = 78_254_177
 
         self.shard = -1
+
+        self.min_doc_id = 0
+        self.max_doc_id = 78_254_177
         self.doc_set_mask = np.ones(self.max_doc_id, dtype=bool)
 
         self.term_fst.load(os.path.join(index_path, "terms.fst"))
@@ -379,12 +444,29 @@ class ShardWorker:
 
         self.avg_doc_length = sum_doc_length / self.doc_count
 
-        """
-        self.min_doc_id = self.doc_bounds[str(shard)][0]
-        self.max_doc_id = self.doc_bounds[str(shard)][1]
-        self.doc_set_mask = np.ones(self.max_doc_id - self.min_doc_id, dtype=bool)
-        """
-        self.min_doc_id = 0
+        doc_ids_npy = os.path.join(self.index_path, f"doc_ids_{shard}.npy")
+        doc_offsets_npy = os.path.join(self.index_path, f"doc_offsets_{shard}.npy")
+        doc_lengths_npy = os.path.join(self.index_path, f"doc_lengths_{shard}.npy")
+        if os.path.exists(doc_ids_npy) and os.path.exists(doc_offsets_npy):
+            self.doc_ids = np.load(doc_ids_npy, mmap_mode="r")
+            self.doc_offsets = np.load(doc_offsets_npy, mmap_mode="r")
+            self.doc_lengths = np.load(doc_lengths_npy, mmap_mode="r")
+
+        self.min_doc_id = self.doc_ids[0]
+        self.max_doc_id = self.doc_ids[-1]
+        range_doc_ids = self.max_doc_id - self.min_doc_id + 1
+        doc_set_mask_file = os.path.join(self.index_path, "doc_set_mask.npy")
+        if os.path.exists(doc_set_mask_file):
+            os.remove(doc_set_mask_file)
+
+        self.doc_set_mask = np.ones(range_doc_ids, dtype=bool)
+        np.save(doc_set_mask_file, self.doc_set_mask)
+        time.sleep(0.5)
+        self.doc_set_mask = np.load(
+            doc_set_mask_file,
+            mmap_mode="r+",
+            allow_pickle=True,
+        )
 
         """
         for doc_id, value in self.doc_fst.items():
@@ -468,9 +550,53 @@ class ShardWorker:
                 all_positions.append(fast_cumsum(all_deltas).tolist())
 
         logger.info(f"Time taken: {time.time() - start} in shard {shard} for {term}")
-        print(f"Time taken: {time.time() - start} in shard {shard} for {term}")
 
         return shard, postings_count, doc_ids, term_frequencies, all_positions
+
+    def _search_doc_lengths_np(self, doc_id: int, shard: int):
+        if not hasattr(self, "doc_ids") or not hasattr(self, "doc_lengths"):
+            return None
+
+        idx = np.searchsorted(self.doc_ids, doc_id)
+        if idx < len(self.doc_ids) and self.doc_ids[idx] == doc_id:
+            return self.doc_lengths[idx]
+
+        return None
+
+    def _get_document_length(self, doc_id: int, shard: int):
+        doc_length = self._search_doc_lengths_np(doc_id, shard)
+        if doc_length is not None:
+            self.doc_length_cache.put(doc_id, doc_length)
+            return doc_length
+
+        doc_length = self._get_document_metadata(doc_id, shard, -1, keys=["doc_length"])
+        self.doc_length_cache.put(doc_id, doc_length)
+        return doc_length
+
+    def _get_document_length_batch(self, doc_ids: list[int] | np.ndarray, shard: int):
+        if not hasattr(self, "doc_ids") or not hasattr(self, "doc_lengths"):
+            return None
+
+        if isinstance(doc_ids, list):
+            doc_ids_arr = np.array(doc_ids)
+        else:
+            doc_ids_arr = doc_ids
+
+        indices = np.searchsorted(self.doc_ids, doc_ids_arr)
+
+        valid_mask = (indices < len(self.doc_ids)) & (
+            self.doc_ids[indices] == doc_ids_arr
+        )
+        result = np.zeros(len(doc_ids), dtype=np.uint16)
+        result[valid_mask] = self.doc_lengths[indices[valid_mask]]
+        for i in range(len(doc_ids)):
+            if not valid_mask[i]:
+                result[i] = self._get_document_metadata(
+                    doc_ids[i], shard, -1, keys=["doc_length"]
+                )
+                self.doc_length_cache.put(doc_ids[i], result[i])
+
+        return result
 
     def _get_scored_search(
         self,
@@ -494,7 +620,7 @@ class ShardWorker:
         term_info = {}
         for term in query.parsed_query:
             _, doc_freq, doc_ids, term_frequencies, _ = self._get_term(
-                term, shard, -1, limit=-1
+                term, shard, -1, limit=limit
             )
             if len(doc_ids) > 0:
                 term_info[term] = {
@@ -512,14 +638,34 @@ class ShardWorker:
         max_doc_id = np.max(all_doc_ids_arr)
         id_range = max_doc_id - min_doc_id + 1
 
-        doc_lengths = np.array(
-            [
-                self._get_document_metadata(doc_id, shard, -1, keys=["doc_length"])
-                for doc_id in all_doc_ids
-            ]
-        )
+        doc_lengths = self._get_document_length_batch(all_doc_ids_arr, shard)
         scores = np.zeros(len(all_doc_ids_arr), dtype=np.float32)
-        for term, info in term_info.items():
+        rarest_term_order = sorted(
+            term_info.keys(), key=lambda x: term_info[x]["doc_freq"]
+        )
+
+        for term in rarest_term_order:
+            info = term_info[term]
+            doc_ids = np.array(info["doc_ids"], dtype=np.int64)
+            doc_freq = int(info["doc_freq"])
+            term_frequencies = np.array(info["term_frequencies"], dtype=np.float32)
+
+            scores = calculate_bm25_numba(
+                scores,
+                all_doc_ids_arr,
+                doc_ids,
+                term_frequencies,
+                doc_freq,
+                doc_lengths,
+                self.doc_count,
+                self.avg_doc_length,
+                min_doc_id,
+                id_range,
+                k1,
+                b,
+            )
+
+        """
             doc_ids = info["doc_ids"]
             doc_freq = info["doc_freq"]
 
@@ -541,6 +687,7 @@ class ShardWorker:
             tf = numerator / denominator
 
             scores += idf * tf
+        """
 
         if len(scores) <= limit:
             return [(score, doc_id) for score, doc_id in zip(scores, all_doc_ids_arr)]
@@ -553,11 +700,10 @@ class ShardWorker:
     def _search(self, query: Query, shard: int = 0, limit=100_000):
         def _search_helper(query):
             if isinstance(query, TermQuery):
-                return self._get_term(query.query, shard, -1, limit=-1)
+                return self._get_term(query.parsed_query, shard, -1, limit=-1)
             elif isinstance(query, AND):
                 left = _search_helper(query.left)
                 right = _search_helper(query.right)
-
                 return self._get_intersection([left, right], shard, [-1, -1])
             elif isinstance(query, OR):
                 left = _search_helper(query.left)
@@ -641,17 +787,33 @@ class ShardWorker:
     def _get_complement(self, term: str | tuple[int, np.ndarray, np.ndarray]):
         if isinstance(term, str):
             _, doc_freq, doc_ids, term_frequencies, _ = self._get_term(
-                term, 0, -1, False
+                term, -1, -1, False
             )
         else:
-            doc_freq, doc_ids, term_frequencies = term[1], term[2], term[3]
+            doc_freq, doc_ids, term_frequencies = term[0], term[2], term[3]
 
-        self.doc_set_mask[doc_ids - self.min_doc_id] = False
-        complement_doc_ids = np.where(self.doc_set_mask)[0]
-        self.doc_set_mask[doc_ids - self.min_doc_id] = True
+        if len(doc_ids) == 0:
+            return (
+                -1,
+                len(self.doc_set_mask),
+                np.where(self.doc_set_mask)[0] + self.min_doc_id,
+                np.zeros(len(self.doc_set_mask), dtype=np.uint),
+                [],
+            )
+
+        min_doc_id = np.min(doc_ids)
+        max_doc_id = np.max(doc_ids)
+        id_range = max_doc_id - min_doc_id + 1
+
+        temp_mask = np.ones(id_range, dtype=bool)
+        indices = doc_ids - min_doc_id
+
+        temp_mask[indices] = False
+        complement_doc_ids = np.where(temp_mask)[0]
+        complement_doc_ids += min_doc_id
 
         return (
-            0,
+            -1,
             len(complement_doc_ids),
             complement_doc_ids,
             np.zeros(len(complement_doc_ids), dtype=np.uint),
@@ -690,8 +852,8 @@ class ShardWorker:
                 )
 
             if intersection_mask is None or intersection_doc_ids is None:
-                intersection_mask = doc_ids
                 intersection_doc_ids = doc_ids
+                intersection_mask = np.ones(len(doc_ids), dtype=bool)
                 intersection_term_frequencies = term_frequencies
                 # [Doc1[position1, position2, ...], Doc2[...], ...]
                 intersection_all_positions = []
@@ -1082,8 +1244,8 @@ class OnDiskIndex(IndexBase):
     def get_document_frequency(self, term: str) -> int:
         return self.get_term(term).document_frequency
 
-    def get_document_metadata(self, doc_id: int, keys=["all"]) -> dict:
-        shard, offset, doc_length = list(
+    def get_document_metadata(self, doc_id: int, keys=["all"]) -> dict | None:
+        items = list(
             _read_fst(
                 self.doc_fst,
                 str(doc_id),
@@ -1091,7 +1253,11 @@ class OnDiskIndex(IndexBase):
                 size_key=SIZE_KEY["offset_doc_length"],
                 shard_size_key=SIZE_KEY["offset_shard_doc_length"],
             )
-        )[0]
+        )
+        if len(items) == 0:
+            return None
+
+        shard, offset, doc_length = items[0]
         if offset != -1 and keys[0] == "doc_length" and len(keys) == 1:
             return {"doc_length": doc_length}
 
@@ -1102,17 +1268,6 @@ class OnDiskIndex(IndexBase):
         return future.result()
 
     def get_document_length(self, doc_id: int) -> int:
-        print(
-            list(
-                _read_fst(
-                    self.doc_fst,
-                    str(doc_id),
-                    is_sharded=self.is_sharded,
-                    size_key=SIZE_KEY["offset_doc_length"],
-                    shard_size_key=SIZE_KEY["offset_shard_doc_length"],
-                )
-            ),
-        )
         shard, offset, doc_length = list(
             _read_fst(
                 self.doc_fst,

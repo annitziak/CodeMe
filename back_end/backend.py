@@ -199,11 +199,26 @@ def reorder_as_per_filter(result, filters, selected_clusters=None):
 
 # main driver function
 if __name__ == "__main__":
-    import multiprocessing
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Search Engine")
+    parser.add_argument("--index-path", type=str, help="Path to load index")
+    parser.add_argument(
+        "--embedding-path",
+        type=str,
+        help="Path to load embeddings",
+        default="retrieval_models/data/embedding2.pkl",
+    )
+    parser.add_argument(
+        "--reranker-path",
+        type=str,
+        help="Path to load reranker embeddings",
+        default="/media/seanleishman/Disk/embeddings_v2",
+    )
+    args = parser.parse_args()
 
     # ENABLE ON WINDOWS IF USING MULTIPROCESSING
     # multiprocessing.freeze_support()
-    multiprocessing.set_start_method("spawn")
 
     search_module = load_backend(r"C:\Users\DELL\Documents\GitHub\ttds_assignment\back_end\.cache\index-1m-doc-title-body")
     app.run(host="0.0.0.0", port=8080)

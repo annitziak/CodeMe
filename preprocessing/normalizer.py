@@ -39,6 +39,9 @@ class StopWordNormalizer(SubNormalizer):
         else:
             self.stop_words = stop_words_set
 
+    def __repr__(self):
+        return f"StopWordNormalizer(stop_words={len(self.stop_words)})"
+
     def normalize_term(self, term: Term):
         if term.term in self.stop_words:
             term.term = ""
@@ -47,6 +50,9 @@ class StopWordNormalizer(SubNormalizer):
 class StemmingNormalizer(SubNormalizer):
     def __init__(self):
         self.stemmer = Stemmer.Stemmer("english")
+
+    def __repr__(self):
+        return "StemmingNormalizer()"
 
     def __getstate__(self) -> object:
         data = self.__dict__.copy()
@@ -68,6 +74,9 @@ class UnicodeToAsciiNormalizer(SubNormalizer):
     Removes accents and other diacritics
     """
 
+    def __repr__(self):
+        return "UnicodeToAsciiNormalizer()"
+
     def normalize_term(self, term: Term | str):
         if isinstance(term, Term):
             term.term = unidecode(term.term)
@@ -80,6 +89,9 @@ class UnicodeToAsciiNormalizer(SubNormalizer):
 class Normalizer:
     def __init__(self, operations: list[SubNormalizer] = []):
         self.operations = operations
+
+    def __repr__(self):
+        return f"Normalizer(operations={self.operations})"
 
     def __call__(self, *args, **kwargs):
         return self.normalize(*args, **kwargs)

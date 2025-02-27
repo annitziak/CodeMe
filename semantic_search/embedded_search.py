@@ -46,24 +46,13 @@ class EmbeddingSearchIndex:
         print("Building new FAISS index...")
         start_time = time.time()
 
-        # For cosine similarity, we use IndexFlatIP (inner product) with normalized vectors
-        if use_gpu and faiss.get_num_gpus() > 0:
-            res = faiss.StandardGpuResources()
-            index = faiss.IndexFlatIP(self.dim)
-            index = faiss.index_cpu_to_gpu(res, 0, index)
-        else:
-            index = faiss.IndexFlatIP(self.dim)
-
-        # For larger datasets, you might want to use IVF for better scalability
-        # Uncomment the following for a more scalable index:
-
-        # Create quantizer
         quantizer = faiss.IndexFlatIP(self.dim)
         # Create IVF index (1024 clusters for 50M vectors is reasonable)
         nlist = 1024
         index = faiss.IndexIVFFlat(
             quantizer, self.dim, nlist, faiss.METRIC_INNER_PRODUCT
         )
+        index.make_direct_map()
 
         # Need to train this index
         print("Training IVF index...")
@@ -135,41 +124,53 @@ class EmbeddingSearchIndex:
         query = np.asarray(query_vector).reshape(1, self.dim).astype(np.float32)
         faiss.normalize_L2(query)
 
-        valid_indicies = []
-        doc_id_map = {}
+        valid_ids = []
+        missing_ids = []
 
         for doc_id in filter_doc_ids:
             if doc_id not in self.doc_ids:
+                missing_ids.append(doc_id)
                 continue
+            valid_ids.append(doc_id)
 
-            idx = self.doc_ids[doc_id]
-            valid_indicies.append(idx)
-            doc_id_map[len(valid_indicies) - 1] = doc_id
+        valid_indices = [self.doc_ids[doc_id] for doc_id in valid_ids]
+        index_to_doc_id = {idx: doc_id for doc_id, idx in self.doc_ids.items()}
 
-        if len(valid_indicies) == 0:
+        id_selector = faiss.IDSelectorArray(valid_indices)
+        k_search = min(k, len(valid_indices))
+        if k_search == 0:
             return []
 
-        id_selector = faiss.IDSelectorArray(valid_indicies)
         distances, indices = self.index.search(
-            query, k, params=faiss.SearchParametersIVF(sel=id_selector)
+            query, k_search, params=faiss.SearchParametersIVF(sel=id_selector)
         )
 
-        if len(indices) == 0:
-            return [{"doc_id": doc_id, "lm_score": 0.0} for doc_id in filter_doc_ids]
-
         results = []
+        seen_doc_ids = set()
         for i, idx in enumerate(indices[0]):
             if idx == -1:
                 continue
 
-            doc_id = doc_id_map[idx]
-            similarity = distances[0][i]
+            doc_id = index_to_doc_id[idx]
+            seen_doc_ids.add(doc_id)
+
+            similarity = float(distances[0][i])
             results.append({"doc_id": doc_id, "lm_score": similarity})
 
-        if len(results) == 0:
-            return [{"doc_id": doc_id, "lm_score": 0.0} for doc_id in filter_doc_ids]
+        min_score = 0.0
+        if results:
+            min_score = min(r["lm_score"] for r in results)
 
-        return results
+        for doc_id in missing_ids:
+            if doc_id not in seen_doc_ids:
+                results.append({"doc_id": doc_id, "lm_score": min_score})
+
+        fallback_score = min_score - 0.1 if results else 0.0
+        for doc_id in missing_ids:
+            results.append({"doc_id": doc_id, "lm_score": fallback_score})
+
+        results.sort(key=lambda x: x["lm_score"], reverse=True)
+        return results[:k]
 
 
 # Example usage
@@ -179,11 +180,12 @@ if __name__ == "__main__":
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device="cuda")
 
     index = EmbeddingSearchIndex(
-        h5_path="./embeddings/embeddings.h5", metadata_path="./embeddings/metadata.pkl"
+        h5_path="/media/seanleishman/Disk/embeddings_v2/embeddings.h5",
+        metadata_path="/media/seanleishman/Disk/embeddings_v2/metadata.pkl",
     )
 
     # Build or load index
-    index.build_index(index_path="./embeddings/faiss_cosine.index")
+    index.build_index(index_path="./embeddings/faiss_cosine_direct_map.index")
 
     # Example search with a random vector (replace with your query embedding)
     query = np.random.random(index.dim).astype(np.float32)
