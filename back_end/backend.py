@@ -33,6 +33,9 @@ IDX_TO_ITEM = {
     "title": 11,
 }
 
+@app.route("/",methods=["GET"])
+def hello_world():
+    return "<h1>backend is running!!!</h1>"
 
 def extract_search_args(request):
     if request.method == "POST":
@@ -264,4 +267,4 @@ if __name__ == "__main__":
     search_module = load_backend(
         args.index_path, args.embedding_path, args.reranker_path
     )
-    app.run(host="0.0.0.0", port=8088)
+    app.run(host="0.0.0.0", port=8080)
