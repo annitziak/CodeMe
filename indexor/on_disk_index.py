@@ -744,7 +744,7 @@ class ShardWorker:
         distances = query.distances
 
         if len(terms) == 1:
-            return self._get_term(terms[0], shard, offset, limit=limit, positions=True)
+            return self._get_term(terms[0], shard, offset, limit=-1, positions=True)
 
         _, doc_freq, doc_ids, term_frequencies, all_positions = self._get_intersection(
             terms, shard, [-1] * len(terms), positions=True
@@ -841,7 +841,7 @@ class ShardWorker:
 
             if isinstance(term, str):
                 _, doc_freq, doc_ids, term_frequencies, all_positions = self._get_term(
-                    term, shard, offset, positions=positions
+                    term, shard, offset, positions=positions, limit=-1
                 )
             else:
                 doc_freq, doc_ids, term_frequencies, all_positions = (
@@ -858,33 +858,38 @@ class ShardWorker:
                 # [Doc1[position1, position2, ...], Doc2[...], ...]
                 intersection_all_positions = []
                 if positions:
-                    intersection_all_positions = [[x] for x in all_positions]
+                    intersection_all_positions = [
+                        [[] for _ in range(len(terms))] for _ in doc_ids
+                    ]
+
+                    for idx, doc_positions in enumerate(all_positions):
+                        intersection_all_positions[idx][term_idx] = doc_positions
                 continue
 
-            intersection_mask = np.isin(intersection_doc_ids, doc_ids)
-            intersection_doc_ids = intersection_doc_ids[intersection_mask]
-            intersection_term_frequencies = intersection_term_frequencies[
-                intersection_mask
-            ]
+            current_doc_id_to_idx = {doc_id: idx for idx, doc_id in enumerate(doc_ids)}
+            common_doc_mask = np.array(
+                [doc_id in current_doc_id_to_idx for doc_id in intersection_doc_ids]
+            )
+            new_doc_ids = intersection_doc_ids[common_doc_mask]
+            new_term_frequencies = intersection_term_frequencies[common_doc_mask]
 
             if positions:
-                for idx, doc_positions in enumerate(all_positions):
-                    doc_id = doc_ids[idx]
-                    if doc_id not in intersection_doc_ids:
+                new_positions = []
+                for idx, (doc_id, keep) in enumerate(
+                    zip(intersection_doc_ids, common_doc_mask)
+                ):
+                    if not keep:
                         continue
 
-                    intersection_idx = np.where(intersection_doc_ids == doc_id)[0][0]
-                    if len(intersection_all_positions[intersection_idx]) <= term_idx:
-                        intersection_all_positions[intersection_idx].append([])
+                    doc_positions = intersection_all_positions[idx]
+                    current_idx = current_doc_id_to_idx[doc_id]
+                    doc_positions[term_idx] = all_positions[current_idx]
+                    new_positions.append(doc_positions)
 
-                    intersection_all_positions[intersection_idx][term_idx].extend(
-                        doc_positions
-                    )
-                intersection_all_positions = [
-                    x
-                    for idx, x in enumerate(intersection_all_positions)
-                    if intersection_mask[idx]
-                ]
+                intersection_all_positions = new_positions
+
+            intersection_doc_ids = new_doc_ids
+            intersection_term_frequencies = new_term_frequencies
 
         return (
             0,
