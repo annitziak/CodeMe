@@ -1,8 +1,10 @@
+import logging
+
 from flask import Flask, request, jsonify
 from back_end.search import load_backend
-from retrieval_models.retrieval_functions import *
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 
 IDX_TO_ITEM = {
     0: "doc_id",
@@ -35,7 +37,48 @@ IDX_TO_ITEM = {
 def hello_world():
     return "<h1>backend is running!!!</h1>"
 
-@app.route("/search", methods=["GET"])
+def extract_search_args(request):
+    if request.method == "POST":
+        data = request.get_json()
+        logger.info(f"Data: {data}")
+        if not data:
+            return jsonify({"error": "Invalid JSON"}), 400
+
+        query = data.get("query", "")
+        page = int(data.get("page", 0))
+        page_size = int(data.get("page_size", 20))
+        filters = data.get("filters", {})
+        options = data.get("options", {})
+
+        selected_clusters = filters.get("tags", None)
+        reorder_date = filters.get("date", {}).get("reorder", False)
+
+        rerank_metadata = options.get("rerank_metadata", True)
+        rerank_lm = options.get("rerank_lm", True)
+    else:
+        query = request.args.get("query")  # Extract query
+        filters = request.args.getlist("filters")  # Extract multiple filter values
+        page = int(request.args.get("page", 0))  # Extract page number
+        page_size = int(request.args.get("page_size", 20))  # Extract page size
+
+        rerank_metadata = bool(request.args.get("rerank_metadata", True))
+        rerank_lm = bool(request.args.get("rerank_lm", True))
+
+        selected_clusters = request.args.get("tags", None)
+        reorder_date = request.args.get("reorder_date", False)
+
+    return {
+        "query": query,
+        "page": page,
+        "page_size": page_size,
+        "rerank_metadata": rerank_metadata,
+        "rerank_lm": rerank_lm,
+        "selected_clusters": selected_clusters,
+        "reorder_date": reorder_date,
+    }
+
+
+@app.route("/search", methods=["GET", "POST"])
 def search():
     """
     Structure of the request:
@@ -44,9 +87,14 @@ def search():
         page_size: int
         # BELOW IS TENTATIVE TO SUPPORT HERE
         filters: dict[
-            from_date: str
-            to_date: str
-            tags: list[str]
+            "date": {
+                "from": str,
+                "to": str,
+                "reorder": bool
+            }
+            "tag": {
+                "tags": list[str],
+            }
         ]
         options: dict[
             expansion: bool
@@ -82,30 +130,22 @@ def search():
         400: Bad Request
         500: Internal Server Error
     """
-    query = request.args.get("query")  # Extract query
-    filters = request.args.getlist("filters")  # Extract multiple filter values
-    page = int(request.args.get("page", 0))  # Extract page number
-    page_size = int(request.args.get("page_size", 20))  # Extract page size
-
-    rerank_metadata = bool(request.args.get("rerank_metadata", True))
-    rerank_lm = bool(request.args.get("rerank_lm", True))
-
-    print(f"Page: {page}, Page Size: {page_size}")
-
+    args = extract_search_args(request)
     result = search_module.search(
-        query,
-        page=page,
-        page_size=page_size,
-        rerank_lm=rerank_lm,
-        rerank_metadata=rerank_metadata,
-    )  # Search
-    result = reorder_as_per_filter(result, filters)  # Apply filters
+        args["query"],
+        page=args["page"],
+        page_size=args["page_size"],
+        rerank_lm=args["rerank_lm"],
+        rerank_metadata=args["rerank_metadata"],
+        selected_clusters=args["selected_clusters"],
+        reorder_date=args["reorder_date"],
+    )
 
     return jsonify(
         {
             "result": result.results,
-            "page": page,
-            "page_size": page_size,
+            "page": args["page"],
+            "page_size": args["page_size"],
             "has_next": result.has_next,
             "has_prev": result.has_prev,
             "total_results": result.total_results,
@@ -113,7 +153,7 @@ def search():
     ), 200
 
 
-@app.route("/advanced_search", methods=["GET"])
+@app.route("/advanced_search", methods=["GET", "POST"])
 def advanced_search():
     """
     Structure of the request:
@@ -122,18 +162,23 @@ def advanced_search():
         page_size: int
         # BELOW IS TENTATIVE TO SUPPORT HERE
         filters: dict[
-            from_date: str
-            to_date: str
-            tags: list[str]
+            "date": {
+                "from": str,
+                "to": str,
+                "reorder": bool
+            }
+            "tags": list[str],
         ]
         options: dict[
             expansion: bool
             boost_terms: bool
+            rerank_metadata: bool [default: False]
+            rerank_lm: bool [default: False]
         ]
     Structure of the response:
         results: list[
             dict[
-                doc_id: int,
+                doc_id: int
                 score: float
                 view_count: int
                 owneruserid: int
@@ -147,30 +192,35 @@ def advanced_search():
                 title: str ??? unsupported
             ]
         ]
+        page: int
+        page_size: int
+        total_results: int # Total number from the search (not on the page)
+        has_next: bool
+        has_prev: bool
 
     Error Codes:
         200: OK
         400: Bad Request
         500: Internal Server Error
     """
-    query = request.args.get("query")  # Extract query
-    filters = request.args.getlist("filters")  # Extract multiple filter values
-    page = int(request.args.get("page", 0))  # Extract page number
-    page_size = int(request.args.get("page_size", 20))  # Extract page size
-
-    result = search_module.advanced_search(query, page=page, page_size=page_size)
-    result = reorder_as_per_filter(result, filters)
-
-    total_results = result.total_results
+    args = extract_search_args(request)
+    result = search_module.advanced_search(
+        args["query"],
+        page=args["page"],
+        page_size=args["page_size"],
+        rerank_metadata=args["rerank_metadata"],
+        selected_clusters=args["selected_clusters"],
+        reorder_date=args["reorder_date"],
+    )
 
     return jsonify(
         {
             "result": result.results,
-            "page": page,
-            "page_size": page_size,
+            "page": args["page"],
+            "page_size": args["page_size"],
             "has_next": result.has_next,
             "has_prev": result.has_prev,
-            "total_results": total_results,
+            "total_results": result.total_results,
         }
     ), 200
 
@@ -190,15 +240,6 @@ def format_result(result):
 def retreival_function(query):
     return ["doc1", "doc2", "doc3"]
 
-
-def reorder_as_per_filter(result, filters, selected_clusters=None):
-    if "date" in filters:
-        result = reorder_as_date(result)  # Reorder by date
-
-    if "tag" in filters and selected_clusters:
-        result = reorder_as_tag(result, selected_clusters)  # Reorder by selected cluster names
-
-    return result  # Return reordered results
 
 # main driver function
 if __name__ == "__main__":
