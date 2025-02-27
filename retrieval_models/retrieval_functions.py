@@ -194,19 +194,7 @@ CLUSTER_MAPPING = parse_clusters_from_file(file_path)
 
 
 def reorder_as_date(result):
-    # Extract metadata and store with original results
-    results_with_date = []
-
-    for doc_result in result:
-        creation_date = doc_result.get(
-            "creation_date", 0
-        )  # Default to 0 if key doesn't exist
-        results_with_date.append((creation_date, doc_result))
-
-    results_with_date.sort(key=lambda x: x[0])
-    sorted_results = [doc[1] for doc in results_with_date]
-
-    return sorted_results
+    return sorted(result, key=lambda x: x.get("creation_date", 0), reverse=True)
 
 
 def reorder_as_tag(result, selected_clusters):

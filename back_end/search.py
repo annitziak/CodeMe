@@ -194,6 +194,11 @@ class Search:
         return_result.results = self.reranker.fuse_scores(return_result.results)
         return_result.results = return_result.results[:page_size]
 
+        return_result.results = reorder_as_per_filter(
+            return_result.results,
+            reorder_date=reorder_date,
+        )
+
         return return_result
 
     def search(

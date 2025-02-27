@@ -97,7 +97,7 @@ class PhraseQuery(Query):
         return result_query, distances[1:]
 
     def ppformat(self, level=0):
-        return " " * level + " ".join(self.parsed_query) + "\n"
+        return " " * level + '"' + " ".join(self.parsed_query) + '"' + "\n"
 
 
 class ProximityQuery(Query):
