@@ -33,9 +33,11 @@ IDX_TO_ITEM = {
     "title": 11,
 }
 
-@app.route("/",methods=["GET"])
+
+@app.route("/", methods=["GET"])
 def hello_world():
     return "<h1>backend is running!!!</h1>"
+
 
 def extract_search_args(request):
     if request.method == "POST":
@@ -51,7 +53,7 @@ def extract_search_args(request):
         options = data.get("options", {})
 
         selected_clusters = filters.get("tags", None)
-        reorder_date = filters.get("date", {}).get("reorder", False)
+        reorder_date = filters.get("date", False)
 
         rerank_metadata = options.get("rerank_metadata", True)
         rerank_lm = options.get("rerank_lm", True)
@@ -65,7 +67,7 @@ def extract_search_args(request):
         rerank_lm = bool(request.args.get("rerank_lm", True))
 
         selected_clusters = request.args.get("tags", None)
-        reorder_date = request.args.get("reorder_date", False)
+        reorder_date = request.args.get("date", False)
 
     return {
         "query": query,
@@ -87,11 +89,7 @@ def search():
         page_size: int
         # BELOW IS TENTATIVE TO SUPPORT HERE
         filters: dict[
-            "date": {
-                "from": str,
-                "to": str,
-                "reorder": bool
-            }
+            "date": "reorder": bool
             "tag": {
                 "tags": list[str],
             }
@@ -162,11 +160,7 @@ def advanced_search():
         page_size: int
         # BELOW IS TENTATIVE TO SUPPORT HERE
         filters: dict[
-            "date": {
-                "from": str,
-                "to": str,
-                "reorder": bool
-            }
+            "date": bool
             "tags": list[str],
         ]
         options: dict[
@@ -259,6 +253,7 @@ if __name__ == "__main__":
         help="Path to load reranker embeddings",
         default="/media/seanleishman/Disk/embeddings_v2",
     )
+    parser.add_argument("--port", type=int, default=8080, help="Port to run the server")
     args = parser.parse_args()
 
     # ENABLE ON WINDOWS IF USING MULTIPROCESSING
@@ -267,4 +262,4 @@ if __name__ == "__main__":
     search_module = load_backend(
         args.index_path, args.embedding_path, args.reranker_path
     )
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=args.port)
