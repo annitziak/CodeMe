@@ -12,6 +12,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Search, X, Eye, ThumbsUp, Filter } from "lucide-react";
 
 const ResultsPage = () => {
@@ -25,6 +26,7 @@ const ResultsPage = () => {
   const [query, setQuery] = useState(initialQuery);
   const [selectedFilters, setSelectedFilters] = useState([]);
   const [usePostResults, setUsePostResults] = useState(false);
+  const [sortByDate, setSortByDate] = useState(false);
 
   const isAdvancedSearch = location.pathname.includes("advanced_search");
 
@@ -45,7 +47,7 @@ const ResultsPage = () => {
 
   useEffect(() => {
     if (query.trim() && !isFetching) {
-      if (selectedFilters.length === 0) {
+      if (selectedFilters.length === 0 && !sortByDate) {
         setUsePostResults(false);
         refetch();
       } else {
@@ -57,6 +59,7 @@ const ResultsPage = () => {
           searchType: isAdvancedSearch ? "advanced" : "regular",
           filters: {
             tags: selectedFilters,
+            date: sortByDate,
           },
         });
       }
@@ -64,6 +67,7 @@ const ResultsPage = () => {
   }, [
     query,
     selectedFilters,
+    sortByDate,
     initialPage,
     isAdvancedSearch,
     pageSize,
@@ -244,7 +248,7 @@ const ResultsPage = () => {
                       tag && (
                         <span
                           key={i}
-                          className="bg-yellow-200 text-yellow-700 text-xs font-semibold px-2 py-1 rounded-full flex items-center space-x-1"
+                          className="text-center bg-yellow-200 text-yellow-700 text-xs font-semibold px-2 py-1 rounded-full flex items-center space-x-1"
                         >
                           ✏️ {tag}
                         </span>
@@ -305,15 +309,23 @@ const ResultsPage = () => {
                 "Other",
               ].map((filter) => (
                 <label key={filter} className="flex items-center space-x-2">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={selectedFilters.includes(filter)}
-                    onChange={() => toggleFilter(filter)}
-                    className="text-blue-600"
+                    onCheckedChange={() => toggleFilter(filter)}
                   />
                   <span className="text-gray-700">{filter}</span>
                 </label>
               ))}
+            </div>
+            <div className="flex items-center space-x-2 mt-3">
+              <Checkbox
+                id="terms"
+                checked={sortByDate}
+                onCheckedChange={() => setSortByDate((prev) => !prev)}
+              />
+              <label htmlFor="terms" className="text-gray-700">
+                Sort by date
+              </label>
             </div>
           </div>
         </div>
