@@ -43,7 +43,11 @@ BOOSTED_TERMS = {
 }
 
 
-def load_backend(index_path):
+def load_backend(
+    index_path,
+    embedding_path="retrieval_models/data/embedding2.pkl",
+    reranker_path="/media/seanleishman/Disk/embeddings_v2",
+):
     if index_path is None or not os.path.exists(index_path):
         logger.error(f"Index path {index_path} does not exist. Using mock data")
         return Search.mock()
@@ -51,9 +55,11 @@ def load_backend(index_path):
     index = Index(load_path=index_path)
     preprocessor = Preprocessor(parser_kwargs={"parser_type": "raw"})
     embedding_model = EmbeddingModel(
-        vocab=index.get_vocab(), save_path="retrieval_models/data/embedding.pkl"
+        vocab=None,
+        vocab_fn=index.get_vocab,
+        save_path=embedding_path,
     )
-    reranker = Reranker()
+    reranker = Reranker(load_dir=reranker_path)
 
     return Search(index, preprocessor, embedding_model, reranker)
 
@@ -63,6 +69,26 @@ def to_py(item):
         return item.item()
 
     return item
+
+
+class SearchCache:
+    def __init__(self, max_size=100_000):
+        self.cache = {}
+        self.max_size = max_size
+
+    def __contains__(self, key):
+        return key in self.cache
+
+    def __getitem__(self, key):
+        return self.cache[key]
+
+    def __setitem__(self, key, value):
+        if len(self.cache) >= self.max_size:
+            self.cache.popitem()
+        self.cache[key] = value
+
+    def get(self, key, default=None):
+        return self.cache.get(key, default)
 
 
 class Search:
@@ -87,6 +113,8 @@ class Search:
             f"Search Engine initialized with the following boosted terms: {self.boosted_terms}"
         )
 
+        self.cache = SearchCache()
+
     def _pre_search(self, query, expansion=False, boost_terms=True, k=10):
         logger.info(f"Preprocessing query: {query}")
         tokens = self.preprocessor.preprocess(query, return_words=True)
@@ -102,15 +130,30 @@ class Search:
         return query
 
     def _post_search(
-        self, results, query="", rerank_metadata=True, rerank_lm=True, k=10
+        self,
+        results,
+        query="",
+        rerank_metadata=True,
+        rerank_lm=False,
+        page=0,
+        page_size=20,
     ):
         total_results = len(results)
         return_result = SearchResult(
             results=results, time_taken=0, total_results=total_results, query=query
         )
 
-        results = results[:k]
+        start_idx = page * page_size
+        end_idx = start_idx + 500
+
+        results = results[start_idx:end_idx]
+        if end_idx < total_results:
+            return_result.has_next = True
+        if start_idx > 0:
+            return_result.has_prev = True
+
         return_result.results = self.format_results(results)
+        return_result.query = query
 
         logger.info(f"Result from index after clipping: {return_result}")
 
@@ -123,15 +166,40 @@ class Search:
             )
             logger.info(f"Reranked with LM: {return_result}")
 
+        return_result.results = self.reranker.fuse_scores(return_result.results)
+        return_result.results = return_result.results[:page_size]
+
         return return_result
 
-    def search(self, query, expansion=False, boost_terms=True, k=10) -> SearchResult:
+    def search(
+        self,
+        query,
+        expansion=False,
+        boost_terms=True,
+        rerank_metadata=True,
+        rerank_lm=True,
+        page=0,
+        page_size=20,
+        k_word_expansion=10,
+    ) -> SearchResult:
         start = time.time()
 
-        tokens = self._pre_search(query, expansion, boost_terms, k)
+        tokens = self._pre_search(query, expansion, boost_terms, k=k_word_expansion)
+
         query = FreeTextQuery(tokens)
-        results = self.index.search(query)
-        ret = self._post_search(results, rerank_metadata=True, rerank_lm=True)
+        if query in self.cache:
+            results = self.cache[query]
+        else:
+            results = self.index.search(query)
+            self.cache[query] = results
+
+        ret = self._post_search(
+            results,
+            rerank_metadata=rerank_metadata,
+            rerank_lm=rerank_lm,
+            page=page,
+            page_size=page_size,
+        )
 
         ret.time_taken = time.time() - start
         logger.info(
@@ -140,20 +208,26 @@ class Search:
 
         return ret
 
-    def advanced_search(self, query, expansion=False, boost_terms=True, k=10):
+    def advanced_search(
+        self, query, expansion=False, boost_terms=True, k=10, page=0, page_size=20
+    ):
         start = time.time()
-        tokens = self.preprocessor.preprocess(query, return_words=True)
+        query = BooleanQuery(query, preprocessor=self.preprocessor)
+        query.parse()
+        print(f"Query after preprocessing: \n{query._ppformat()}")
 
-        if expansion and self.embedding_model:
-            tokens = query_expansion(tokens, self.embedding_model, top_k=k)
-        if boost_terms:
-            tokens.extend([token for token in tokens if token in self.boosted_terms])
+        if query in self.cache:
+            results = self.cache[query]
+        else:
+            results = self.index.search(query)
 
-        # Encompasses BooleanQuery, PhraseQuery and ProximityQuery
-        tokens = self._pre_search(query, expansion, boost_terms, k)
-        query = BooleanQuery(tokens)
-        results = self.index.search(query)
-        ret = self._post_search(results)
+        ret = self._post_search(
+            results,
+            page=page,
+            page_size=page_size,
+            rerank_metadata=True,
+            rerank_lm=False,
+        )
 
         ret.time_taken = time.time() - start
         logger.info(
@@ -166,10 +240,14 @@ class Search:
         ret = []
         for doc_result in results:
             metadata = self.index.get_document_metadata(doc_result[1])
+            if metadata is None:
+                continue
+
             ret.append(
                 {
                     "doc_id": to_py(doc_result[1]),
-                    "score": to_py(doc_result[0]),
+                    "bm25_score": to_py(doc_result[0]),
+                    "score": to_py(metadata["score"]),
                     "tags": metadata["tags"],
                     "ownerdisplayname": metadata["ownerdisplayname"],
                     "creation_date": to_py(metadata["creationdate"]),
@@ -178,8 +256,8 @@ class Search:
                     "comment_count": to_py(metadata["commentcount"]),
                     "favorite_count": to_py(metadata["favoritecount"]),
                     "metadata_score": to_py(metadata["metadatascore"]),
-                    "title": "TO BE ADDED",
-                    "body": "TO BE ADDED",
+                    "title": metadata["title"],
+                    "body": metadata["body"],
                 }
             )
 
@@ -199,17 +277,32 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Search Engine")
     parser.add_argument("--index-path", type=str, help="Path to load index")
+    parser.add_argument(
+        "--embedding-path",
+        type=str,
+        help="Path to load embeddings",
+        default="retrieval_models/data/embedding2.pkl",
+    )
+    parser.add_argument(
+        "--reranker-path",
+        type=str,
+        help="Path to load reranker embeddings",
+        default="/media/seanleishman/Disk/embeddings_v2",
+    )
     args = parser.parse_args()
 
-    search = load_backend(args.index_path)
-    search.search("hello world in python", expansion=False, boost_terms=True, k=10)
-    search.search(
-        "how good is python as a programming langauge. Does it do well for FindMax queries",
-        expansion=False,
-        k=10,
-    )
+    search = load_backend(args.index_path, args.embedding_path, args.reranker_path)
 
     while True:
         query = input("Enter query: ")
-        results = search.search(query, expansion=False, boost_terms=True, k=10)
+
+        results = search.search(query, expansion=False, boost_terms=True)
         print(results)
+
+        results = search.advanced_search(query, expansion=False, boost_terms=True)
+
+    search.search("hello world in python", expansion=False, boost_terms=True)
+    search.search(
+        "how good is python as a programming langauge. Does it do well for FindMax queries",
+        expansion=False,
+    )

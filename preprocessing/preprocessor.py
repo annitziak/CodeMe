@@ -1,5 +1,6 @@
 import logging
 import pprint
+import copy
 
 from preprocessing import NormalTextBlock, LinkBlock, CodeBlock, Block
 from preprocessing.parser import DefaultParserInterface, HTMLParserInterface
@@ -50,11 +51,18 @@ class Preprocessor:
         self.parser = BuildParser(**parser_kwargs)
         self.tokenizer = Tokenizer(**tokenizer_kwargs)
 
-    def __call__(self, text):
-        return self.preprocess(text)
+    def __repr__(self):
+        return f"Preprocessor(parser={self.parser}, tokenizer={self.tokenizer})"
 
-    def preprocess(self, text, return_words=False):
+    def __call__(self, text, *args, **kwargs):
+        return self.preprocess(text, *args, **kwargs)
+
+    def preprocess(self, text, return_words=False, return_original_text=False):
         text_blocks = self.parser.parse(text)
+        original_text_blocks = None
+        if return_original_text:
+            original_text_blocks = copy.deepcopy(text_blocks)
+
         for text_block in text_blocks:
             tokenized_out = self.tokenizer(text_block)
             text_block.words = tokenized_out.tokenized_text
@@ -62,6 +70,10 @@ class Preprocessor:
 
         if return_words:
             return [x.term for text_block in text_blocks for x in text_block.words]
+
+        if return_original_text:
+            assert original_text_blocks is not None
+            return text_blocks, original_text_blocks
 
         return text_blocks
 

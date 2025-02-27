@@ -3,7 +3,6 @@ from back_end.search import load_backend
 from retrieval_models.retrieval_functions import *
 
 app = Flask(__name__)
-search_module = load_backend(".cache/index-1m-custom-metadata")
 
 IDX_TO_ITEM = {
     0: "doc_id",
@@ -52,6 +51,8 @@ def search():
         options: dict[
             expansion: bool
             boost_terms: bool
+            rerank_metadata: bool [default: False]
+            rerank_lm: bool [default: False]
         ]
     Structure of the response:
         results: list[
@@ -81,24 +82,32 @@ def search():
         400: Bad Request
         500: Internal Server Error
     """
-    query = request.form.get("query")  # Extract query
-    filters = request.form.getlist("filters")  # Extract multiple filter values
-    page = request.form.get("page", 0)  # Extract page number
-    page_size = request.form.get("page_size", 20)  # Extract page size
+    query = request.args.get("query")  # Extract query
+    filters = request.args.getlist("filters")  # Extract multiple filter values
+    page = int(request.args.get("page", 0))  # Extract page number
+    page_size = int(request.args.get("page_size", 20))  # Extract page size
 
-    result = search_module.search(query)
+    rerank_metadata = bool(request.args.get("rerank_metadata", True))
+    rerank_lm = bool(request.args.get("rerank_lm", True))
+
+    print(f"Page: {page}, Page Size: {page_size}")
+
+    result = search_module.search(
+        query,
+        page=page,
+        page_size=page_size,
+        rerank_lm=rerank_lm,
+        rerank_metadata=rerank_metadata,
+    )  # Search
     result = reorder_as_per_filter(result, filters)  # Apply filters
-
-    has_next = False
-    has_prev = False
 
     return jsonify(
         {
             "result": result.results,
             "page": page,
             "page_size": page_size,
-            "has_next": has_next,
-            "has_prev": has_prev,
+            "has_next": result.has_next,
+            "has_prev": result.has_prev,
             "total_results": result.total_results,
         }
     ), 200
@@ -144,25 +153,23 @@ def advanced_search():
         400: Bad Request
         500: Internal Server Error
     """
-    query = request.form.get("query")  # Extract query
-    filters = request.form.getlist("filters")  # Extract multiple filter values
-    page = request.form.get("page", 0)  # Extract page number
-    page_size = request.form.get("page_size", 20)  # Extract page size
+    query = request.args.get("query")  # Extract query
+    filters = request.args.getlist("filters")  # Extract multiple filter values
+    page = int(request.args.get("page", 0))  # Extract page number
+    page_size = int(request.args.get("page_size", 20))  # Extract page size
 
-    result = search_module.advanced_search(query)
+    result = search_module.advanced_search(query, page=page, page_size=page_size)
     result = reorder_as_per_filter(result, filters)
 
-    has_next = False
-    has_prev = False
     total_results = result.total_results
 
     return jsonify(
         {
-            "result": result.result,
+            "result": result.results,
             "page": page,
             "page_size": page_size,
-            "has_next": has_next,
-            "has_prev": has_prev,
+            "has_next": result.has_next,
+            "has_prev": result.has_prev,
             "total_results": total_results,
         }
     ), 200
@@ -184,21 +191,39 @@ def retreival_function(query):
     return ["doc1", "doc2", "doc3"]
 
 
-def reorder_as_per_filter(result, filters):
+def reorder_as_per_filter(result, filters, selected_clusters=None):
     if "date" in filters:
         result = reorder_as_date(result)  # Reorder by date
 
-    if "tag" in filters:
-        result = reorder_as_tag(result)  # Reorder by tag
+    if "tag" in filters and selected_clusters:
+        result = reorder_as_tag(result, selected_clusters)  # Reorder by selected cluster names
 
     return result  # Return reordered results
 
-
-@app.route("/Queryresponse/<result>")
-def QueryResult(result):
-    return "%s" % result
-
-
 # main driver function
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Search Engine")
+    parser.add_argument("--index-path", type=str, help="Path to load index")
+    parser.add_argument(
+        "--embedding-path",
+        type=str,
+        help="Path to load embeddings",
+        default="retrieval_models/data/embedding2.pkl",
+    )
+    parser.add_argument(
+        "--reranker-path",
+        type=str,
+        help="Path to load reranker embeddings",
+        default="/media/seanleishman/Disk/embeddings_v2",
+    )
+    args = parser.parse_args()
+
+    # ENABLE ON WINDOWS IF USING MULTIPROCESSING
+    # multiprocessing.freeze_support()
+
+    search_module = load_backend(
+        args.index_path, args.embedding_path, args.reranker_path
+    )
+    app.run(host="0.0.0.0", port=8088)

@@ -86,7 +86,10 @@ class DocMetadata:
     answercount: Stat
     commentcount: Stat
     favoritecount: Stat
+    hasacceptedanswer: bool = False
 
+    title: str = ""
+    body: str = ""
     doc_length: Stat = field(default_factory=lambda: Stat(0))
 
     @staticmethod
@@ -138,6 +141,10 @@ class DocMetadata:
             return self.favoritecount
         if key == "doc_length":
             return self.doc_length
+        if key == "title":
+            return self.title
+        if key == "body":
+            return self.body
 
     def to_json(self):
         def get_stat(stat, key):
@@ -218,6 +225,11 @@ class DocMetadata:
         self.favoritecount.update(other.favoritecount)
         self.doc_length.update(other.doc_length)
 
+        self.tags = other.tags
+        self.title = other.title
+        self.body = other.body
+        self.hasacceptedanswer = other.hasacceptedanswer
+
         return self
 
     def update_with_raw(
@@ -228,21 +240,27 @@ class DocMetadata:
         owneruserid=None,
         ownerdisplayname="",
         tags="",
+        title="",
+        body="",
         answercount=None,
         commentcount=None,
         favoritecount=None,
         doc_length=None,
+        hasacceptedanswer=False,
     ):
         self.creationdate.update(creationdate)
         self.score.update(score)
         self.viewcount.update(viewcount)
         self.owneruserid.update(owneruserid)
         self.ownerdisplayname = ownerdisplayname
+        self.title = title
+        self.body = body
         self.tags = tags
         self.answercount.update(answercount)
         self.commentcount.update(commentcount)
         self.favoritecount.update(favoritecount)
         self.doc_length.update(doc_length)
+        self.hasacceptedanswer = hasacceptedanswer
 
         return self
 
@@ -349,7 +367,11 @@ class Term:
         term_frequencies: list[int],
         position_lists: list[list[int]],
         positions=False,
+        doc_freq: int = 0,
     ):
+        if doc_freq == 0:
+            doc_freq = len(doc_ids)
+
         t_start = time.time()
 
         doc_ids = np.asarray(doc_ids, dtype=np.uint32)
@@ -399,7 +421,7 @@ class Term:
         t_end = time.time()
 
         self.posting_lists.extend(add_posting_lists)
-        self.document_frequency += len(doc_ids)
+        self.document_frequency += doc_freq
         print(
             "Time to construct posting lists:",
             t_end - t_start,

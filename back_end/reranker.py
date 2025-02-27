@@ -3,6 +3,8 @@ import os
 import pickle
 import logging
 
+from semantic_search.embedded_search import EmbeddingSearchIndex
+from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModel
 from scipy.spatial.distance import cosine
 
@@ -10,16 +12,31 @@ logger = logging.getLogger(__name__)
 
 
 class Reranker:
-    def __init__(self, do_rerank_lm=True):
+    def __init__(
+        self,
+        do_rerank_lm=True,
+        load_dir=".cache/doc_embeddings",
+        pretrained_model_name_or_path="sentence-transformers/all-MiniLM-L6-v2",
+    ):
         self.metadata = None
-        self.load()
-        self.tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
-        self.model = AutoModel.from_pretrained("microsoft/codebert-base")
+        if "sentence-transformers" in pretrained_model_name_or_path:
+            self.model = SentenceTransformer(pretrained_model_name_or_path)
+        else:
+            self.tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
+            self.model = AutoModel.from_pretrained("microsoft/codebert-base")
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = self.model.to(self.device)
 
         self.do_rerank_lm = do_rerank_lm
-        self.lm_documents = self.load() if self.do_rerank_lm else {}
+        self.load_dir = load_dir
+
+        h5_path = os.path.join(self.load_dir, "embeddings.h5")
+        metadata_path = os.path.join(self.load_dir, "metadata.pkl")
+        faiss_path = os.path.join(self.load_dir, "faiss_cosine.index")
+        self.lm_documents = EmbeddingSearchIndex(h5_path, metadata_path).build_index(
+            faiss_path
+        )
 
     def load(self):
         file_path_1 = os.path.join("retrieval_models", "data", "half_1.pkl")
@@ -47,6 +64,45 @@ class Reranker:
 
         return lm_documents
 
+    def fuse_scores(self, retrieved_documents, weights=(0.5, 0.25, 0.25)):
+        if not retrieved_documents:
+            return []
+
+        min_bm25 = min([doc.get("bm25_score", 0) for doc in retrieved_documents])
+        mid_bm25 = sum([doc.get("bm25_score", 0) for doc in retrieved_documents]) / len(
+            retrieved_documents
+        )
+        max_bm25 = max([doc.get("bm25_score", 0) for doc in retrieved_documents])
+        diff_bm25 = max_bm25 - min_bm25 if max_bm25 != min_bm25 else 1
+
+        min_lm = min([doc.get("lm_score", 0) for doc in retrieved_documents])
+        mid_lm = sum([doc.get("lm_score", 0) for doc in retrieved_documents]) / len(
+            retrieved_documents
+        )
+        max_lm = max([doc.get("lm_score", 0) for doc in retrieved_documents])
+        diff_lm = max_lm - min_lm if max_lm != min_lm else 1
+
+        min_md = min([doc.get("metadata_score", 0) for doc in retrieved_documents])
+        mid_md = sum(
+            [doc.get("metadata_score", 0) for doc in retrieved_documents]
+        ) / len(retrieved_documents)
+        max_md = max([doc.get("metadata_score", 0) for doc in retrieved_documents])
+        diff_md = max_md - min_md if max_md != min_md else 1
+
+        for doc in retrieved_documents:
+            bm25 = (doc.get("bm25_score", mid_bm25) - min_bm25) / diff_bm25
+            lm = (doc.get("lm_score", mid_lm) - min_lm) / diff_lm
+            md = (doc.get("metadata_score", mid_md) - min_md) / diff_md
+            doc["final_score_normalized"] = (
+                weights[0] * bm25 + weights[1] * lm + weights[2] * md
+            )
+
+        retrieved_documents = sorted(
+            retrieved_documents, key=lambda x: x.get("final_score", 0), reverse=True
+        )
+
+        return retrieved_documents
+
     def rerank_metadata(self, retrieved_documents):
         "rerank the top retrieved documents based on metadata"
 
@@ -57,6 +113,8 @@ class Reranker:
     def rerank_lm(self, retrieved_documents, query):
         "rerank the top retrieved documents based on language model"
         # lm_queries is doc_id : encoded query
+        if isinstance(self.model, SentenceTransformer):
+            return self.rerank_lm_sentence_transformer(retrieved_documents, query)
 
         # Encode the query
         encoded_query_tokenized = self.tokenizer(
@@ -90,6 +148,38 @@ class Reranker:
 
         # Sort documents by similarity (higher is better)
         reranked_documents.sort(key=lambda x: x["lm_score"], reverse=True)
+
+        # Return only document IDs in sorted order
+        return reranked_documents
+
+    def rerank_lm_sentence_transformer(self, retrieved_documents, query):
+        encoded_query = self.model.encode(query, convert_to_tensor=True).cpu()
+        doc_map = {doc["doc_id"]: doc for doc in retrieved_documents}
+        doc_ids = [x["doc_id"] for x in retrieved_documents]
+        reranked_documents = self.lm_documents.search_filtered(
+            encoded_query, doc_ids, k=len(retrieved_documents)
+        )
+
+        reranked_documents.sort(key=lambda x: x["lm_score"], reverse=True)
+        for idx, doc in enumerate(reranked_documents):
+            doc.update(doc_map[doc["doc_id"]])
+
+        return reranked_documents
+
+    def _rerank_lm_sentence_transformer(self, retrieved_documents, query):
+        "rerank the top retrieved documents based on language model using sentence transformer"
+        # Encode the query
+        encoded_query = self.model.encode(query, convert_to_tensor=True).cpu()
+        doc_map = {doc["doc_id"]: doc for doc in retrieved_documents}
+        doc_ids = [x["doc_id"] for x in retrieved_documents]
+        reranked_documents = self.lm_documents.search_filtered(
+            encoded_query, doc_ids, k=len(retrieved_documents)
+        )
+
+        # Sort documents by similarity (higher is better)
+        reranked_documents.sort(key=lambda x: x["lm_score"], reverse=True)
+        for idx, doc in enumerate(reranked_documents):
+            doc.update(doc_map[doc["doc_id"]])
 
         # Return only document IDs in sorted order
         return reranked_documents

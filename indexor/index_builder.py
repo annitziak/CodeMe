@@ -10,8 +10,9 @@ from indexor.index_builder.index_builder import DocumentShardedIndexBuilder
 from indexor.index_builder.index_merger import IndexMerger
 from indexor.structures import DocMetadata, Stat
 
+from preprocessing import CodeBlock, NormalTextBlock
 from preprocessing.preprocessor import Preprocessor
-from preprocessing.tokenizer import BuildTokenizer
+from preprocessing.tokenizer import BuildTokenizer, BuildNormalizer
 from utils.db_connection import DBConnection
 
 logging.basicConfig(
@@ -35,6 +36,9 @@ class IndexBuilder:
         action: str = "build",
         is_sharded=False,
         tokenizer_type: str = "split-variables",
+        normalizer_type: str = "default",
+        min_bound=-1,
+        max_bound=-1,
     ) -> None:
         """
         Args:
@@ -63,10 +67,14 @@ class IndexBuilder:
         self.is_sharded = is_sharded
 
         self.base_tokenizer_kwargs = BuildTokenizer(tokenizer_type)
+        self.base_normalizer_kwargs = BuildNormalizer(normalizer_type)
         self.tokenizer_kwargs = {
             "code_tokenizer_kwargs": self.base_tokenizer_kwargs,
             "text_tokenizer_kwargs": self.base_tokenizer_kwargs,
             "link_tokenizer_kwargs": self.base_tokenizer_kwargs,
+            "post_text_normalizer_operations": self.base_normalizer_kwargs,
+            "post_code_normalizer_operations": self.base_normalizer_kwargs,
+            "post_link_normalizer_operations": self.base_normalizer_kwargs,
         }
         print(self.tokenizer_kwargs)
         self.title_preprocessor = Preprocessor(
@@ -76,6 +84,9 @@ class IndexBuilder:
             parser_kwargs={"parser_type": "html"},
             tokenizer_kwargs=self.tokenizer_kwargs,
         )
+
+        self.min_bound = min_bound
+        self.max_bound = max_bound
 
         self.debug = debug
         self.config = {
@@ -128,7 +139,9 @@ class IndexBuilder:
         logger.info("Building index")
 
         with self.db_connection as conn:
-            min_id, max_id, num_posts = self._get_id_stats(conn)
+            min_id, max_id, num_posts = self._get_id_stats(
+                conn, self.min_bound, self.max_bound
+            )
             logger.info(
                 f"Retrieved post stats: min_id={min_id}, max_id={max_id}, num_posts={num_posts}"
             )
@@ -250,15 +263,17 @@ class IndexBuilder:
         proc_conn = DBConnection(db_params)
         min_id = float("inf")
         max_id = float("-inf")
+        last_post_id = None
         with proc_conn as conn:
             cur = conn.get_cursor(name=f"index_builder_{shard}")
             # include tags???
             debug = "LIMIT 100" if self.debug else ""
             select_query = f"""SELECT
-            id, title, body, creationdate, score, viewcount, owneruserid, ownerdisplayname, tags, answercount, commentcount, favoritecount
+            id, title, body, creationdate, score, viewcount, owneruserid, ownerdisplayname, tags, answercount, commentcount, favoritecount, acceptedanswerid
             FROM posts
             WHERE id >= {start} AND id <= {end}
-            ORDER BY id ASC {debug}"""
+            ORDER BY id ASC
+            {debug}"""  # AND posttypeid = 1
             cur.execute(select_query)
             logger.info(
                 "Processing shard %d: %d-%d with query %s",
@@ -280,7 +295,7 @@ class IndexBuilder:
                     post_id,
                     doc_terms,
                     doc_metadata,
-                ) in self._process_posts_batch(batch):
+                ) in self._process_posts_batch(batch, conn, shard=shard):
                     if post_id < min_id:
                         min_id = post_id
                     if post_id > max_id:
@@ -293,7 +308,7 @@ class IndexBuilder:
 
         return index_builder.doc_count
 
-    def _process_posts_batch(self, rows: tuple[list]):
+    def _process_posts_batch(self, rows: tuple[list], conn, shard=-1):
         """
         A generator that processes a batch of posts and yields the post ID and document terms for each post
         This is called by _process_posts_shard to process a batch of posts for each shard
@@ -306,19 +321,42 @@ class IndexBuilder:
             doc_terms: dict
             postition_offset: int
         """
+        body_limit = 30
         for row in rows:
             post_id, title, body, *raw_metadata = row
+            '''
+            sql_query = f"""SELECT id, title, body
+            FROM posts
+            WHERE parentid = {post_id} AND posttypeid = 2"""
+            cursor = conn.get_cursor()
+            cursor.execute(sql_query)
+            answers = cursor.fetchall()
+            '''
+
+            has_accepted_answer = raw_metadata[-1] is not None
+            raw_metadata = raw_metadata[:-1]
+
             doc_metadata = DocMetadata(*raw_metadata)
             doc_metadata.doc_length = Stat(0)
+            doc_metadata.title = title if title is not None else ""
+            doc_metadata.hasacceptedanswer = has_accepted_answer
 
             doc_terms = {}
             position_offset = 0
 
-            for field, text in [("title", title), ("body", body)]:
+            answers = []
+            blocks = [("title", title), ("body", body)] + [
+                ("body", answer[2]) for answer in answers
+            ]
+            body = []
+
+            for field, text in blocks:
                 if text is None:
                     continue
 
-                blocks = self._tokenize(text, field=field)
+                blocks, original_blocks = self._tokenize(
+                    text, field=field, return_original_text=True
+                )
                 for block in blocks:
                     for word in block.words:
                         if word.term not in doc_terms.keys():
@@ -333,21 +371,37 @@ class IndexBuilder:
                                 if word.start_position >= 0
                                 else -1
                             )
-
                     position_offset += block.block_length
 
+                for block in original_blocks:
+                    if len(body) < body_limit:
+                        if (
+                            isinstance(block, NormalTextBlock)
+                            or isinstance(block, CodeBlock)
+                            and block.in_line
+                        ):
+                            if block.text is None:
+                                continue
+
+                            body += [
+                                x
+                                for x in block.text.split()
+                                if isinstance(x, str) and len(x.strip()) > 0
+                            ]
+
             doc_metadata.doc_length.update(position_offset, reset=True)
+            doc_metadata.body = " ".join(body)
             yield post_id, doc_terms, doc_metadata
 
-    def _tokenize(self, text: str, field: str = "body"):
+    def _tokenize(self, text: str, field: str = "body", *args, **kwargs):
         if field == "title":
-            return self.title_preprocessor(text)
+            return self.title_preprocessor(text, *args, **kwargs)
         elif field == "body":
-            return self.body_preprocessor(text)
+            return self.body_preprocessor(text, *args, **kwargs)
         else:
             raise ValueError(f"Invalid field: {field}")
 
-    def _get_id_stats(self, conn):
+    def _get_id_stats(self, conn, min_bound=-1, max_bound=-1):
         """
         Get the min and max post IDs and the total number of posts in the database.
 
@@ -363,10 +417,19 @@ class IndexBuilder:
         min_id, max_id = conn.cur.fetchone()
 
         # estimate the number of posts (COUNT(*) is slow)
-        conn.execute(
-            "SELECT reltuples AS estimate FROM pg_class WHERE relname = 'posts';"
-        )
-        num_posts = conn.cur.fetchone()[0]
+        if min_bound < 0 and max_bound < 0:
+            conn.execute(
+                "SELECT reltuples AS estimate FROM pg_class WHERE relname = 'posts';"
+            )
+            num_posts = conn.cur.fetchone()[0]
+        else:
+            conn.execute(
+                f"SELECT COUNT(*) FROM posts WHERE id BETWEEN {min_bound} AND {max_bound}"
+            )
+            num_posts = conn.cur.fetchone()[0]
+
+        min_id = max(min_id, min_bound) if min_bound > 0 else min_id
+        max_id = min(max_id, max_bound) if max_bound > 0 else max_id
 
         return min_id, max_id, num_posts
 
@@ -444,9 +507,14 @@ class IndexBuilder:
         )
 
         partition_query = f"""
-            WITH rows AS (
+             WITH bounded_posts AS (
+            SELECT id
+            FROM posts
+            WHERE id BETWEEN {min_id} AND {max_id}
+        ),
+            rows AS (
                 SELECT id, ROW_NUMBER() OVER (ORDER BY id) as row_num
-                FROM posts
+                FROM bounded_posts
             )
             SELECT MIN(id) as shard_start, MAX(id) as shard_end
             FROM (
@@ -472,6 +540,8 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--num-workers", type=int, default=24)
     parser.add_argument("--db-name", type=str, default="stack_overflow_10k")
+    parser.add_argument("--min-bound", type=int, default=-1)
+    parser.add_argument("--max-bound", type=int, default=-1)
     parser.add_argument(
         "--action",
         choices=["build", "merge", "build-fst"],
@@ -490,6 +560,12 @@ if __name__ == "__main__":
         choices=["keep-split-variables", "split-variables"],
         default="split-variables",
     )
+    parser.add_argument(
+        "--normalizer-type",
+        type=str,
+        choices=["default", "no-stopwords"],
+        default="default",
+    )
     args = parser.parse_args()
 
     DB_PARAMS["database"] = args.db_name
@@ -502,6 +578,8 @@ if __name__ == "__main__":
         num_workers=args.num_workers,
         action=args.action,
         is_sharded=args.is_sharded,
+        min_bound=args.min_bound,
+        max_bound=args.max_bound,
     )
     builder.process_posts()
     index = Index(load_path=args.index_path)
@@ -522,5 +600,5 @@ if __name__ == "__main__":
     print(index.get_term("java", positions=True))
     print(index.get_term("javascript", positions=True))
 
-    print(index.get_document_length(26602868))
+    # print(index.get_document_length(26602868))
     print("HI")
