@@ -6,7 +6,7 @@ export const searchApi = createApi({
   endpoints: (builder) => ({
     
     search: builder.query({
-      query: ({ query, page = 0, page_size = 20 }) => ({
+      query: ({ query, page = 0, page_size = 10 }) => ({
         url: "/search",
         method: "GET",
         params: { query, page, page_size },

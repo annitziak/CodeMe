@@ -20,7 +20,7 @@ const ResultsPage = () => {
 
   const initialQuery = decodeURIComponent(searchParams.get("query") || "");
   const initialPage = parseInt(searchParams.get("page") || "0", 10);
-  const pageSize = 20;
+  const pageSize = 10;
 
   const [query, setQuery] = useState(initialQuery);
   const [selectedFilters, setSelectedFilters] = useState([]);
@@ -264,7 +264,7 @@ const ResultsPage = () => {
               </div>
             ))}
 
-            <div className="flex justify-between mt-auto pb-10">
+            <div className="flex justify-between items-center mt-3 pb-10">
               <Button
                 className={`px-4 py-2 rounded-lg ${
                   !results?.has_prev
