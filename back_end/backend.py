@@ -69,6 +69,13 @@ def extract_search_args(request):
         selected_clusters = request.args.get("tags", None)
         reorder_date = request.args.get("date", False)
 
+    if (
+        selected_clusters is not None
+        and isinstance(selected_clusters, list)
+        and len(selected_clusters) == 0
+    ):
+        selected_clusters = None
+
     return {
         "query": query,
         "page": page,
