@@ -31,6 +31,9 @@ IDX_TO_ITEM = {
     "title": 11,
 }
 
+@app.route("/",methods=["GET"])
+def hello_world():
+    return "<h1>backend is running!!!</h1>"
 
 @app.route("/search", methods=["GET"])
 def search():
@@ -220,6 +223,7 @@ if __name__ == "__main__":
     # ENABLE ON WINDOWS IF USING MULTIPROCESSING
     # multiprocessing.freeze_support()
 
-    search_module = load_backend(r"C:\Users\DELL\Documents\GitHub\ttds_assignment\back_end\.cache\index-1m-doc-title-body")
+    search_module = load_backend(
+        args.index_path, args.embedding_path, args.reranker_path
+    )
     app.run(host="0.0.0.0", port=8080)
-
