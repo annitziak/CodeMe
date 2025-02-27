@@ -567,6 +567,7 @@ if __name__ == "__main__":
         default="default",
     )
     args = parser.parse_args()
+    logger.info(f"Args: {args}")
 
     DB_PARAMS["database"] = args.db_name
 
@@ -580,6 +581,8 @@ if __name__ == "__main__":
         is_sharded=args.is_sharded,
         min_bound=args.min_bound,
         max_bound=args.max_bound,
+        tokenizer_type=args.tokenizer_type,
+        normalizer_type=args.normalizer_type,
     )
     builder.process_posts()
     index = Index(load_path=args.index_path)
