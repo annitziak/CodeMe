@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath, URL } from "url";
-import tailwindcss from "@tailwindcss/vite"
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -13,8 +13,9 @@ export default defineConfig({
   server: {
     proxy: {
       // Proxy API requests starting with /api to the Flask backend
-      '/api': {
-        target: 'http://127.0.0.1:8080', // Flask backend URL
+      "/api": {
+        // target: 'http://127.0.0.1:8080', // Flask backend URL
+        target: "http://35.226.202.157:8080", // backend url
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""), // Remove /api prefix
       },
