@@ -402,6 +402,7 @@ class ShardWorker:
 
         self.term_fst.load(os.path.join(index_path, "terms.fst"))
         self.doc_fst.load(os.path.join(index_path, "docs.fst"))
+        
 
         self.all_doc_metadata_keys = [
             "doc_length",
