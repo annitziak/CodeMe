@@ -6,7 +6,11 @@ import logging
 from preprocessing.preprocessor import Preprocessor
 from indexor.index import Index
 from indexor.query import FreeTextQuery, BooleanQuery
-from retrieval_models.retrieval_functions import query_expansion
+from retrieval_models.retrieval_functions import (
+    query_expansion,
+    reorder_as_date,
+    reorder_as_tag,
+)
 from retrieval_models.query_expansion import EmbeddingModel
 
 from back_end.modeling_outputs import SearchResult
@@ -69,6 +73,20 @@ def to_py(item):
         return item.item()
 
     return item
+
+
+def reorder_as_per_filter(result, selected_clusters=None, reorder_date=False):
+    if reorder_date:
+        logger.info("Reordering results by date")
+        result = reorder_as_date(result)  # Reorder by date
+
+    if selected_clusters is not None:
+        logger.info(f"Filtering results by selected clusters: {selected_clusters}")
+        result = reorder_as_tag(
+            result, selected_clusters
+        )  # Reorder by selected cluster names
+
+    return result  # Return reordered results
 
 
 class SearchCache:
@@ -137,6 +155,8 @@ class Search:
         rerank_lm=False,
         page=0,
         page_size=20,
+        selected_clusters=None,
+        reorder_date=False,
     ):
         total_results = len(results)
         return_result = SearchResult(
@@ -156,6 +176,11 @@ class Search:
         return_result.query = query
 
         logger.info(f"Result from index after clipping: {return_result}")
+        return_result.results = reorder_as_per_filter(
+            return_result.results,
+            selected_clusters=selected_clusters,
+            reorder_date=reorder_date,
+        )
 
         if rerank_metadata:
             return_result.results = self.reranker.rerank_metadata(return_result.results)
@@ -169,6 +194,11 @@ class Search:
         return_result.results = self.reranker.fuse_scores(return_result.results)
         return_result.results = return_result.results[:page_size]
 
+        return_result.results = reorder_as_per_filter(
+            return_result.results,
+            reorder_date=reorder_date,
+        )
+
         return return_result
 
     def search(
@@ -181,6 +211,8 @@ class Search:
         page=0,
         page_size=20,
         k_word_expansion=10,
+        selected_clusters=None,
+        reorder_date=False,
     ) -> SearchResult:
         start = time.time()
 
@@ -199,6 +231,8 @@ class Search:
             rerank_lm=rerank_lm,
             page=page,
             page_size=page_size,
+            selected_clusters=selected_clusters,
+            reorder_date=reorder_date,
         )
 
         ret.time_taken = time.time() - start
@@ -209,12 +243,21 @@ class Search:
         return ret
 
     def advanced_search(
-        self, query, expansion=False, boost_terms=True, k=10, page=0, page_size=20
+        self,
+        query,
+        expansion=False,
+        boost_terms=True,
+        k=10,
+        page=0,
+        page_size=20,
+        rerank_metadata=True,
+        selected_clusters=None,
+        reorder_date=False,
     ):
         start = time.time()
         query = BooleanQuery(query, preprocessor=self.preprocessor)
         query.parse()
-        print(f"Query after preprocessing: \n{query._ppformat()}")
+        logger.info(f"Query after preprocessing: \n{query._ppformat()}")
 
         if query in self.cache:
             results = self.cache[query]
@@ -225,8 +268,10 @@ class Search:
             results,
             page=page,
             page_size=page_size,
-            rerank_metadata=True,
+            rerank_metadata=rerank_metadata,
             rerank_lm=False,
+            selected_clusters=selected_clusters,
+            reorder_date=reorder_date,
         )
 
         ret.time_taken = time.time() - start
