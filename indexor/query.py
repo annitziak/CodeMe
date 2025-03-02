@@ -39,8 +39,6 @@ class TermQuery(Query):
             parsed_query.words[0].term if parsed_query and parsed_query.words else ""
         )
 
-        print(f"TERM QUERY: {self.query} -> {parsed_query} -> {self.parsed_query}")
-
     def parse(self):
         return self.preprocessor(self.query)
 
@@ -49,9 +47,10 @@ class TermQuery(Query):
 
 
 class FreeTextQuery(Query):
-    def __init__(self, query, preprocessor=DEFAULT_PREPROCESSOR):
+    def __init__(self, query, preprocessor=DEFAULT_PREPROCESSOR, word_limit=20):
         super().__init__(query, preprocessor)
 
+        self.word_limit = word_limit
         self.parsed_query = self.parse()
 
     def parse(self):
@@ -67,7 +66,7 @@ class FreeTextQuery(Query):
             raise ValueError(f"Invalid query type: {type(self.query)}")
 
         query = _parse()
-        return [x.term for x in query]
+        return [x.term for x in query][: self.word_limit]
 
     def ppformat(self):
         return " ".join(self.parsed_query)

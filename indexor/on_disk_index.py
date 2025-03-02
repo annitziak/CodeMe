@@ -457,7 +457,10 @@ class ShardWorker:
         range_doc_ids = self.max_doc_id - self.min_doc_id + 1
         doc_set_mask_file = os.path.join(self.index_path, "doc_set_mask.npy")
         if os.path.exists(doc_set_mask_file):
-            os.remove(doc_set_mask_file)
+            try:
+                os.remove(doc_set_mask_file)
+            except FileNotFoundError:
+                pass
 
         self.doc_set_mask = np.ones(range_doc_ids, dtype=bool)
         np.save(doc_set_mask_file, self.doc_set_mask)

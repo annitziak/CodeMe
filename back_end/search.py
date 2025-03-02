@@ -45,6 +45,7 @@ BOOSTED_TERMS = {
     "queue",
     "stack",
 }
+WORD_LIMIT_SEARCH = 20
 
 
 def load_backend(
@@ -213,17 +214,20 @@ class Search:
         k_word_expansion=10,
         selected_clusters=None,
         reorder_date=False,
+        word_limit=WORD_LIMIT_SEARCH,
     ) -> SearchResult:
         start = time.time()
 
         tokens = self._pre_search(query, expansion, boost_terms, k=k_word_expansion)
 
-        query = FreeTextQuery(tokens)
+        query = FreeTextQuery(tokens, word_limit=word_limit)
         if query in self.cache:
             results = self.cache[query]
         else:
             results = self.index.search(query)
             self.cache[query] = results
+
+        results += self._backfill_results(page_size - len(results))
 
         ret = self._post_search(
             results,
@@ -263,7 +267,9 @@ class Search:
             results = self.cache[query]
         else:
             results = self.index.search(query)
+            self.cache[query] = results
 
+        results += self._backfill_results(page_size - len(results))
         ret = self._post_search(
             results,
             page=page,
@@ -307,6 +313,15 @@ class Search:
             )
 
         return ret
+
+    def _backfill_results(self, num_results, query_type=FreeTextQuery):
+        if num_results <= 0:
+            return []
+
+        tokens = self._pre_search("python")
+        query = query_type(tokens, preprocessor=self.preprocessor)
+        results = self.index.search(query)
+        return results[:num_results]
 
     @staticmethod
     def default():
