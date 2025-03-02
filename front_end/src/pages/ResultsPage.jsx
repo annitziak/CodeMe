@@ -45,7 +45,7 @@ const ResultsPage = () => {
     useSearchWithFiltersMutation();
 
   useEffect(() => {
-    if (!query.trim()) return; // Prevent running if query is empty
+    if (!query.trim()) return;
 
     // If no filters & not sorting by date, do GET refetch
     if (selectedFilters.length === 0 && !sortByDate) {
@@ -104,8 +104,6 @@ const ResultsPage = () => {
         ? prevFilters.filter((f) => f !== filter)
         : [...prevFilters, filter];
 
-      console.log("Updated filters:", newFilters); // Debugging filter state
-
       setUsePostResults(newFilters.length > 0);
 
       // Wait for the state to update before making API calls
@@ -155,7 +153,6 @@ const ResultsPage = () => {
     }
   };
 
-  console.log(selectedFilters, "selected filters");
 
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-[#F5F7FA] to-[#E0E7EE]">

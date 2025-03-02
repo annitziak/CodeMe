@@ -33,7 +33,7 @@ export default function SearchPage() {
 
         <div className="flex space-x-4 mb-6">
           <Button
-            className={`px-4 py-2 rounded-full w-32 ${
+            className={`px-4 py-2 rounded-full w-32 cursor-pointer ${
               !isAdvancedSearch ? "bg-blue-500 text-white" : "bg-gray-200 text-gray-700"
             }`}
             onClick={() => setIsAdvancedSearch(false)}
@@ -41,7 +41,7 @@ export default function SearchPage() {
             Search
           </Button>
           <Button
-            className={`px-4 py-2 rounded-full ${
+            className={`px-4 py-2 rounded-full cursor-pointer ${
               isAdvancedSearch ? "bg-blue-500 text-white" : "bg-gray-200 text-gray-700"
             }`}
             onClick={() => setIsAdvancedSearch(true)}
@@ -49,25 +49,32 @@ export default function SearchPage() {
             Advanced Search
           </Button>
         </div>
-
-        <div className="relative flex items-center bg-white shadow-md rounded-full w-full max-w-2xl px-4 py-2">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSearch();
+          }}
+          className="relative flex items-center bg-white shadow-md rounded-full w-full max-w-2xl px-4 py-2"
+        >
           <Search className="text-gray-400 mr-2" />
           <Input
             type="text"
-            placeholder={`${
-              isAdvancedSearch ? "Advanced search coding questions..." : "Search coding questions..."
-            }`}
+            placeholder={
+              isAdvancedSearch
+                ? "Advanced search coding questions..."
+                : "Search coding questions..."
+            }
             className="flex-grow shadow-none border-none focus:outline-none focus:ring-0 focus-visible:ring-0 text-gray-700 px-2"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
           <Button
-            className="h-[44px] px-6 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-all flex items-center justify-center"
-            onClick={handleSearch}
+            type="submit"
+            className="h-[44px] cursor-pointer px-6 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-all flex items-center justify-center"
           >
             Search
           </Button>
-        </div>
+        </form>
       </main>
 
       <footer className="py-4 bg-gray-200 text-center text-gray-600 text-sm">
