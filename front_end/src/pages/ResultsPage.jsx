@@ -23,7 +23,8 @@ const ResultsPage = () => {
   const initialPage = parseInt(searchParams.get("page") || "0", 10);
   const pageSize = 10;
 
-  const [query, setQuery] = useState(initialQuery);
+  const [inputQuery, setInputQuery] = useState(initialQuery);
+  const [submittedQuery, setSubmittedQuery] = useState(initialQuery);
   const [selectedFilters, setSelectedFilters] = useState([]);
   const [usePostResults, setUsePostResults] = useState(false);
   const [sortByDate, setSortByDate] = useState(false);
@@ -34,28 +35,29 @@ const ResultsPage = () => {
   const {
     data: getData,
     isLoading: getLoading,
+    isFetching: getFetching,
     refetch,
   } = useSearchQuery(
-    { query, page: initialPage, page_size: pageSize },
-    { skip: !query.trim() }
+    { query: submittedQuery, page: initialPage, page_size: pageSize },
+    { skip: !submittedQuery.trim() }
   );
 
   // POST request (triggered when filters are applied)
-  const [searchWithFilters, { data: postData, isLoading: postLoading }] =
-    useSearchWithFiltersMutation();
+  const [
+    searchWithFilters,
+    { data: postData, isLoading: postLoading, isFetching: postFetching },
+  ] = useSearchWithFiltersMutation();
 
   useEffect(() => {
-    if (!query.trim()) return;
+    if (!submittedQuery.trim()) return;
 
-    // If no filters & not sorting by date, do GET refetch
     if (selectedFilters.length === 0 && !sortByDate) {
       setUsePostResults(false);
       refetch();
     } else {
-      // Otherwise, do POST
       setUsePostResults(true);
       searchWithFilters({
-        query,
+        query: submittedQuery,
         page: initialPage,
         page_size: pageSize,
         searchType: isAdvancedSearch ? "advanced" : "regular",
@@ -66,7 +68,7 @@ const ResultsPage = () => {
       });
     }
   }, [
-    query,
+    submittedQuery,
     selectedFilters,
     sortByDate,
     initialPage,
@@ -76,26 +78,11 @@ const ResultsPage = () => {
     searchWithFilters,
   ]);
 
-  const handleSearch = () => {
-    if (query.trim()) {
-      setSearchParams({ query: encodeURIComponent(query), page: 0 });
-      if (selectedFilters.length === 0 && !sortByDate) {
-        setUsePostResults(false);
-        refetch();
-      } else {
-        setUsePostResults(true);
-        searchWithFilters({
-          query,
-          page: 0,
-          page_size: pageSize,
-          searchType: isAdvancedSearch ? "advanced" : "regular",
-          filters: {
-            tags: selectedFilters,
-            date: sortByDate,
-          },
-        });
-      }
-    }
+  const handleSearch = (e) => {
+    e.preventDefault();
+    setSubmittedQuery(inputQuery);
+    setSearchParams({ query: encodeURIComponent(inputQuery), page: 0 });
+    // API call will trigger via the effect above
   };
 
   const toggleFilter = (filter) => {
@@ -103,42 +90,24 @@ const ResultsPage = () => {
       const newFilters = prevFilters.includes(filter)
         ? prevFilters.filter((f) => f !== filter)
         : [...prevFilters, filter];
-
       setUsePostResults(newFilters.length > 0);
-
-      // Wait for the state to update before making API calls
-      setTimeout(() => {
-        if (newFilters.length === 0) {
-          refetch();
-        } else {
-          searchWithFilters({
-            query,
-            page: initialPage,
-            page_size: pageSize,
-            searchType: isAdvancedSearch ? "advanced" : "regular",
-            filters: {
-              tags: newFilters,
-            },
-          });
-        }
-      }, 0);
 
       return newFilters;
     });
   };
 
   const results = usePostResults ? postData || [] : getData || [];
-  const isLoading = usePostResults ? postLoading : getLoading;
 
   const clearQuery = () => {
-    setQuery("");
+    setInputQuery("");
+    setSubmittedQuery("");
     setSearchParams({});
   };
 
   const handleNextPage = () => {
     if (results?.has_next) {
       setSearchParams({
-        query: encodeURIComponent(query),
+        query: encodeURIComponent(submittedQuery),
         page: results.page + 1,
       });
     }
@@ -147,12 +116,15 @@ const ResultsPage = () => {
   const handlePrevPage = () => {
     if (results?.has_prev) {
       setSearchParams({
-        query: encodeURIComponent(query),
+        query: encodeURIComponent(submittedQuery),
         page: results.page - 1,
       });
     }
   };
 
+  const isGetBusy = getLoading || getFetching;
+  const isPostBusy = postLoading || postFetching;
+  const isBusy = usePostResults ? isPostBusy : isGetBusy;
 
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-[#F5F7FA] to-[#E0E7EE]">
@@ -160,28 +132,32 @@ const ResultsPage = () => {
         <h1 className="text-3xl font-semibold text-blue-600 text-center lg:text-left">
           CodeMe
         </h1>
-        <div className="relative flex items-center bg-white shadow-md rounded-full w-full lg:w-[75%]">
+
+        <form
+          onSubmit={handleSearch}
+          className="relative flex items-center bg-white shadow-md rounded-full w-full lg:w-[75%]"
+        >
           <Search className="text-gray-400 ml-4" />
           <Input
             type="text"
             placeholder="Search coding questions..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            value={inputQuery}
+            onChange={(e) => setInputQuery(e.target.value)}
             className="flex-grow shadow-none border-none focus:outline-none focus:ring-0 focus-visible:ring-0 text-gray-700 px-4"
           />
-          {query && (
+          {inputQuery && (
             <X
               className="text-gray-400 cursor-pointer mx-2"
               onClick={clearQuery}
             />
           )}
           <Button
+            type="submit"
             className="h-[44px] px-6 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-all flex items-center justify-center"
-            onClick={handleSearch}
           >
             Search
           </Button>
-        </div>
+        </form>
       </div>
 
       {/* Mobile Filters */}
@@ -219,7 +195,7 @@ const ResultsPage = () => {
         </div>
       </div>
 
-      {isLoading ? (
+      {isBusy ? (
         <p className="text-blue-500 text-center mt-5 text-3xl">
           Loading results...
         </p>

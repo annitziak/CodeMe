@@ -15,7 +15,7 @@ export default defineConfig({
       // Proxy API requests starting with /api to the Flask backend
       "/api": {
         // target: 'http://127.0.0.1:8080', // Flask backend URL
-        target: "http://35.226.202.157:8080", // backend url
+        target: "http://34.70.168.47:8080/", // backend url
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""), // Remove /api prefix
       },
