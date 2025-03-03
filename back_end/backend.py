@@ -57,6 +57,8 @@ def extract_search_args(request):
 
         rerank_metadata = options.get("rerank_metadata", True)
         rerank_lm = options.get("rerank_lm", True)
+
+        use_semantic = options.get("use_semantic", False)
     else:
         query = request.args.get("query")  # Extract query
         filters = request.args.getlist("filters")  # Extract multiple filter values
@@ -68,6 +70,7 @@ def extract_search_args(request):
 
         selected_clusters = request.args.get("tags", None)
         reorder_date = request.args.get("date", False)
+        use_semantic = bool(request.args.get("use_semantic", False))
 
     if (
         selected_clusters is not None
@@ -84,6 +87,7 @@ def extract_search_args(request):
         "rerank_lm": rerank_lm,
         "selected_clusters": selected_clusters,
         "reorder_date": reorder_date,
+        "use_semantic": use_semantic,
     }
 
 
@@ -106,6 +110,7 @@ def search():
             boost_terms: bool
             rerank_metadata: bool [default: False]
             rerank_lm: bool [default: False]
+            use_semantic: bool [default: False]
         ]
     Structure of the response:
         results: list[
@@ -129,6 +134,7 @@ def search():
         total_results: int # Total number from the search (not on the page)
         has_next: bool
         has_prev: bool
+        time_taken: float
 
     Error Codes:
         200: OK
@@ -144,6 +150,7 @@ def search():
         rerank_metadata=args["rerank_metadata"],
         selected_clusters=args["selected_clusters"],
         reorder_date=args["reorder_date"],
+        use_semantic=args["use_semantic"],
     )
 
     return jsonify(
@@ -154,6 +161,7 @@ def search():
             "has_next": result.has_next,
             "has_prev": result.has_prev,
             "total_results": result.total_results,
+            "time_taken": result.time_taken,
         }
     ), 200
 
@@ -222,6 +230,7 @@ def advanced_search():
             "has_next": result.has_next,
             "has_prev": result.has_prev,
             "total_results": result.total_results,
+            "time_taken": result.time_taken,
         }
     ), 200
 
@@ -272,9 +281,7 @@ if __name__ == "__main__":
     # ENABLE ON WINDOWS IF USING MULTIPROCESSING
     multiprocessing.freeze_support()
     search_module = load_backend(
-        ".cache/index-doc-title-body-v2",
-        ".cache/embedding2.pkl",
-        ".cache/embeddings_v2",
+        args.index_path, args.embedding_path, args.reranker_path
     )
 
     app.run(host="0.0.0.0", port=args.port)
