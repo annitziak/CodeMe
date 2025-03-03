@@ -285,10 +285,10 @@ class DocumentShardedIndexBuilder:
                                 score=doc_metadata.score.get_value(),
                                 viewcount=doc_metadata.viewcount.get_value(),
                                 creationdate=doc_metadata.creationdate.get_value(),
-                                reputationuser=doc_metadata.owneruserid.get_value(),
                                 answercount=doc_metadata.answercount.get_value(),
                                 commentcount=doc_metadata.commentcount.get_value(),
                                 favoritecount=doc_metadata.favoritecount.get_value(),
+                                userreputation=doc_metadata.userreputation.get_value(),
                                 minmax_dict={},
                             ),
                         )
@@ -353,6 +353,13 @@ class DocumentShardedIndexBuilder:
                         struct.pack(
                             SIZE_KEY["doc_hasacceptedanswer"],
                             doc_metadata.hasacceptedanswer,
+                        )
+                    )
+
+                    f.write(
+                        struct.pack(
+                            SIZE_KEY["doc_userreputation"],
+                            doc_metadata.userreputation.get_value(),
                         )
                     )
 
