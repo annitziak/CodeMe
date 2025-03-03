@@ -95,25 +95,17 @@ class EmbeddingSearchIndex:
         if self.index is None:
             raise ValueError("Index not built. Call build_index() first.")
 
-        # Ensure query is a numpy array of the right shape and type
         query = np.asarray(query_vector).reshape(1, self.dim).astype(np.float32)
-
-        # Normalize query for cosine similarity
         faiss.normalize_L2(query)
-
-        # Search
         distances, indices = self.index.search(query, k)
 
-        # Map indices to document IDs if available
         results = []
         doc_ids = self.metadata.get("document_ids", [])
 
         for i, idx in enumerate(indices[0]):
             doc_id = doc_ids[idx] if idx < len(doc_ids) else str(idx)
-            similarity = distances[0][
-                i
-            ]  # For normalized vectors, this is cosine similarity
-            results.append({"id": doc_id, "similarity": similarity})
+            similarity = distances[0][i]
+            results.append({"id": doc_id, "lm_score": similarity})
 
         return results
 
@@ -138,34 +130,43 @@ class EmbeddingSearchIndex:
 
         id_selector = faiss.IDSelectorArray(valid_indices)
         k_search = min(k, len(valid_indices))
-        if k_search == 0:
-            return []
-
-        distances, indices = self.index.search(
-            query, k_search, params=faiss.SearchParametersIVF(sel=id_selector)
-        )
-
         results = []
         seen_doc_ids = set()
-        for i, idx in enumerate(indices[0]):
-            if idx == -1:
-                continue
 
-            doc_id = index_to_doc_id[idx]
-            seen_doc_ids.add(doc_id)
+        if k_search != 0:
+            distances, indices = self.index.search(
+                query, k_search, params=faiss.SearchParametersIVF(sel=id_selector)
+            )
 
-            similarity = float(distances[0][i])
-            results.append({"doc_id": doc_id, "lm_score": similarity})
+            for i, idx in enumerate(indices[0]):
+                if idx == -1:
+                    idx = valid_indices[i]
+                    if idx == -1:
+                        continue
 
-        min_score = 0.0
+                    doc_id = index_to_doc_id[idx]
+                    seen_doc_ids.add(doc_id)
+
+                    embedding = self.index.reconstruct(idx)
+                    similarity = 1 - np.dot(embedding, query.flatten())
+                    results.append({"doc_id": doc_id, "lm_score": similarity})
+                    continue
+
+                doc_id = index_to_doc_id[idx]
+                seen_doc_ids.add(doc_id)
+
+                similarity = float(distances[0][i])
+                results.append({"doc_id": doc_id, "lm_score": similarity})
+
+        max_score = 1.0
         if results:
-            min_score = min(r["lm_score"] for r in results)
+            max_score = max(r["lm_score"] for r in results)
 
         for doc_id in missing_ids:
             if doc_id not in seen_doc_ids:
-                results.append({"doc_id": doc_id, "lm_score": min_score})
+                results.append({"doc_id": doc_id, "lm_score": max_score})
 
-        fallback_score = min_score - 0.1 if results else 0.0
+        fallback_score = max_score + 0.1 if results else 1.0
         for doc_id in missing_ids:
             results.append({"doc_id": doc_id, "lm_score": fallback_score})
 
@@ -180,8 +181,8 @@ if __name__ == "__main__":
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device="cuda")
 
     index = EmbeddingSearchIndex(
-        h5_path="/media/seanleishman/Disk/embeddings_v2/embeddings.h5",
-        metadata_path="/media/seanleishman/Disk/embeddings_v2/metadata.pkl",
+        h5_path="/media/seanleishman/Disk/embeddings_v2.bak/embeddings.h5",
+        metadata_path="./.cache/embeddings_v2/metadata.pkl",
     )
 
     # Build or load index
