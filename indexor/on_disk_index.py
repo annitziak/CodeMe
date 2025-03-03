@@ -138,16 +138,11 @@ def calculate_bm25_numba(
         np.log((doc_count_float - doc_freq_float + 0.5) / (doc_freq_float + 0.5))
     )
 
-    in_range = False
+    mask = np.zeros(id_range, dtype=np.bool)
     for i in range(len(doc_ids)):
-        if min_doc_id <= doc_ids[i] <= min_doc_id + id_range - 1:
-            in_range = True
-            break
-
-    if not in_range:
-        return scores.copy()
-
-    # Calculate IDF component
+        idx = doc_ids[i] - min_doc_id
+        if 0 <= idx < id_range:
+            mask[idx] = True
 
     term_freq_lookup = np.zeros(id_range, dtype=np.float32)
     for i in range(len(doc_ids)):
@@ -160,15 +155,15 @@ def calculate_bm25_numba(
     for i in prange(len(all_doc_ids_arr)):
         doc_id = all_doc_ids_arr[i]
         idx = doc_id - min_doc_id
-        tf = term_freq_lookup[idx]
-        if 0 <= idx < id_range:
+        if 0 <= idx < id_range and mask[idx]:
+            tf = term_freq_lookup[idx]
             if tf > 0:
                 numerator = tf * (k1 + 1.0)
                 denominator = tf + norm_factors[i]
                 bm25_score = idf * (numerator / denominator)
-                scores[i] = scores[i] + bm25_score
+                scores[i] += bm25_score
             else:
-                scores[i] = scores[i]
+                scores[i] += scores[i]
 
     return scores
 
@@ -428,6 +423,7 @@ class ShardWorker:
             "tags",
             "creationdate",
             "hasacceptedanswer",
+            # "userreputation",
             "title",
             "body",
         ]
@@ -622,6 +618,7 @@ class ShardWorker:
         limit=1_000_000,
         k1=1.2,
         b=0.75,
+        term_limit=10,
     ):
         """
         We use a locally scored BM25
@@ -637,20 +634,24 @@ class ShardWorker:
         term_info = {}
         for term in query.parsed_query:
             _, doc_freq, doc_ids, term_frequencies, _ = self._get_term(
-                term, shard, -1, limit=1000
+                term, shard, -1, limit=100
             )
             if doc_ids.size > 0:
                 term_info[term] = {
                     "doc_ids": doc_ids,
                     "term_frequencies": term_frequencies,
                     "doc_freq": doc_freq,
+                    "idf": np.log((self.doc_count - doc_freq + 0.5) / (doc_freq + 0.5)),
                 }
 
-        rarest_term_order = sorted(
-            term_info.keys(), key=lambda x: term_info[x]["doc_freq"]
+        filter_term_count = min(term_limit, len(term_info))
+        rarest_term_order = sorted(term_info.keys(), key=lambda x: -term_info[x]["idf"])
+        logger.info(
+            f"Rarest terms: {rarest_term_order[:filter_term_count]} form {filter_term_count} terms out of {len(term_info)}"
         )
+        rarest_term_order = rarest_term_order[:filter_term_count]
 
-        for _, term in enumerate(rarest_term_order):
+        for i, term in enumerate(rarest_term_order):
             _, doc_freq, doc_ids, term_frequencies, _ = self._get_term(
                 term, shard, -1, limit=limit
             )
@@ -664,10 +665,16 @@ class ShardWorker:
             }
 
             doc_ids_set = set(doc_ids.tolist())
-            all_doc_ids.update(doc_ids_set)
+            if i == 0:
+                all_doc_ids.update(doc_ids_set)
+            else:
+                intersection = all_doc_ids.intersection(doc_ids_set)
+                if len(intersection) > 10:
+                    all_doc_ids = intersection
 
+        final_doc_ids = all_doc_ids
         all_doc_ids_arr = np.fromiter(
-            all_doc_ids, dtype=np.int64, count=len(all_doc_ids)
+            final_doc_ids, dtype=np.int64, count=len(final_doc_ids)
         )
         min_doc_id = np.min(all_doc_ids_arr)
         max_doc_id = np.max(all_doc_ids_arr)
@@ -992,6 +999,7 @@ class ShardWorker:
 
                 offset = _offset
                 doc_length = _doc_length
+                break
 
         if offset != -1 and keys[0] == "doc_length" and len(keys) == 1:
             self.doc_length_cache.put(doc_id, doc_length)
