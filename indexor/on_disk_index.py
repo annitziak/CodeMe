@@ -11,7 +11,7 @@ import psutil
 import numpy as np
 import heapq
 
-from numba import jit, uint16, uint32, int64, types
+from numba import jit, uint16, uint32, int64, types, prange
 from concurrent.futures import ProcessPoolExecutor
 
 from indexor.structures import Term, PostingList, IndexBase
@@ -71,34 +71,50 @@ def fast_cumsum(deltas):
     nopython=True,
     fastmath=True,
     cache=True,
+    parallel=False,
+    nogil=True,
 )
 def process_posting_block(
     posting_data,
     limit,
     postings_count,
 ):
-    limit = postings_count if limit == -1 else limit
-    doc_ids = np.zeros(min(postings_count, limit), dtype=np.uint32)
-    term_frequencies = np.zeros(min(postings_count, limit), dtype=np.uint32)
-    position_counts = np.zeros(min(postings_count, limit), dtype=np.uint32)
+    actual_size = min(postings_count, limit if limit > 0 else postings_count)
+
+    doc_ids = np.empty(actual_size, dtype=np.uint32)
+    term_frequencies = np.empty(actual_size, dtype=np.uint32)
+    position_counts = np.empty(actual_size, dtype=np.uint32)
 
     current_doc_id = 0
     offset = 0
-    for i in range(min(postings_count, limit)):
+
+    i = 0
+    while i + 3 < actual_size:
+        for j in range(4):
+            delta, offset = decode_bytes_jit(posting_data, offset)
+            term_frequency, offset = decode_bytes_jit(posting_data, offset)
+            position_count, offset = decode_bytes_jit(posting_data, offset)
+            current_doc_id += delta
+            doc_ids[i + j] = current_doc_id
+            term_frequencies[i + j] = term_frequency
+            position_counts[i + j] = position_count
+        i += 4
+
+    # Handle remaining items
+    while i < actual_size:
         delta, offset = decode_bytes_jit(posting_data, offset)
         term_frequency, offset = decode_bytes_jit(posting_data, offset)
         position_count, offset = decode_bytes_jit(posting_data, offset)
-
         current_doc_id += delta
-
         doc_ids[i] = current_doc_id
         term_frequencies[i] = term_frequency
         position_counts[i] = position_count
+        i += 1
 
     return offset, doc_ids, term_frequencies, position_counts
 
 
-@jit(nopython=True, cache=True, fastmath=True)
+@jit(nopython=True, cache=True, fastmath=True, parallel=True, nogil=True)
 def calculate_bm25_numba(
     scores,
     all_doc_ids_arr,
@@ -116,7 +132,12 @@ def calculate_bm25_numba(
     """
     Numba-accelerated function to update BM25 scores for a single term
     """
-    # Check if any documents for this term are in our range
+    doc_freq_float = float(doc_freq)
+    doc_count_float = float(doc_count)
+    idf = np.float32(
+        np.log((doc_count_float - doc_freq_float + 0.5) / (doc_freq_float + 0.5))
+    )
+
     in_range = False
     for i in range(len(doc_ids)):
         if min_doc_id <= doc_ids[i] <= min_doc_id + id_range - 1:
@@ -124,41 +145,32 @@ def calculate_bm25_numba(
             break
 
     if not in_range:
-        return scores
+        return scores.copy()
 
     # Calculate IDF component
-    doc_freq_float = float(doc_freq)
-    doc_count_float = float(doc_count)
-    idf = np.float32(
-        np.log((doc_count_float - doc_freq_float + 0.5) / (doc_freq_float + 0.5))
-    )
 
-    # Create term frequency lookup array
     term_freq_lookup = np.zeros(id_range, dtype=np.float32)
     for i in range(len(doc_ids)):
         idx = doc_ids[i] - min_doc_id
         if 0 <= idx < id_range:
             term_freq_lookup[idx] = term_frequencies[i]
 
-    # Calculate BM25 components for each document
-    new_scores = np.zeros_like(scores)
-    for i in range(len(all_doc_ids_arr)):
+    norm_factors = k1 * (1.0 - b + b * (doc_lengths / avg_doc_length))
+
+    for i in prange(len(all_doc_ids_arr)):
         doc_id = all_doc_ids_arr[i]
         idx = doc_id - min_doc_id
+        tf = term_freq_lookup[idx]
         if 0 <= idx < id_range:
-            tf = term_freq_lookup[idx]
             if tf > 0:
-                doc_length = doc_lengths[i]
                 numerator = tf * (k1 + 1.0)
-                denominator = tf + k1 * (1.0 - b + b * (doc_length / avg_doc_length))
+                denominator = tf + norm_factors[i]
                 bm25_score = idf * (numerator / denominator)
-                new_scores[i] = scores[i] + bm25_score
+                scores[i] = scores[i] + bm25_score
             else:
-                new_scores[i] = scores[i]
-        else:
-            new_scores[i] = scores[i]
+                scores[i] = scores[i]
 
-    return new_scores
+    return scores
 
 
 def _read_fst(
@@ -552,7 +564,9 @@ class ShardWorker:
                 )
                 all_positions.append(fast_cumsum(all_deltas).tolist())
 
-        logger.info(f"Time taken: {time.time() - start} in shard {shard} for {term}")
+        logger.info(
+            f"Time taken: {time.time() - start} in shard {shard} for {term} and {postings_count} postings"
+        )
 
         return shard, postings_count, doc_ids, term_frequencies, all_positions
 
@@ -623,31 +637,49 @@ class ShardWorker:
         term_info = {}
         for term in query.parsed_query:
             _, doc_freq, doc_ids, term_frequencies, _ = self._get_term(
-                term, shard, -1, limit=limit
+                term, shard, -1, limit=1000
             )
-            if len(doc_ids) > 0:
+            if doc_ids.size > 0:
                 term_info[term] = {
                     "doc_ids": doc_ids,
                     "term_frequencies": term_frequencies,
                     "doc_freq": doc_freq,
                 }
-            all_doc_ids.update(doc_ids)
 
-        if not all_doc_ids:
-            return []
+        rarest_term_order = sorted(
+            term_info.keys(), key=lambda x: term_info[x]["doc_freq"]
+        )
 
-        all_doc_ids_arr = np.array(list(all_doc_ids))
+        for _, term in enumerate(rarest_term_order):
+            _, doc_freq, doc_ids, term_frequencies, _ = self._get_term(
+                term, shard, -1, limit=limit
+            )
+            if doc_ids.size == 0:
+                continue
+
+            term_info[term] = {
+                "doc_ids": doc_ids,
+                "term_frequencies": term_frequencies,
+                "doc_freq": doc_freq,
+            }
+
+            doc_ids_set = set(doc_ids.tolist())
+            all_doc_ids.update(doc_ids_set)
+
+        all_doc_ids_arr = np.fromiter(
+            all_doc_ids, dtype=np.int64, count=len(all_doc_ids)
+        )
         min_doc_id = np.min(all_doc_ids_arr)
         max_doc_id = np.max(all_doc_ids_arr)
         id_range = max_doc_id - min_doc_id + 1
 
         doc_lengths = self._get_document_length_batch(all_doc_ids_arr, shard)
         scores = np.zeros(len(all_doc_ids_arr), dtype=np.float32)
-        rarest_term_order = sorted(
-            term_info.keys(), key=lambda x: term_info[x]["doc_freq"]
-        )
 
         for term in rarest_term_order:
+            if term not in term_info:
+                continue
+
             info = term_info[term]
             doc_ids = np.array(info["doc_ids"], dtype=np.int64)
             doc_freq = int(info["doc_freq"])
@@ -696,7 +728,7 @@ class ShardWorker:
             return [(score, doc_id) for score, doc_id in zip(scores, all_doc_ids_arr)]
 
         top_k_indicies = np.argpartition(scores, -limit)[-limit:]
-        top_k_docs = [(scores[i], all_doc_ids_arr[i]) for i in top_k_indicies]
+        top_k_docs = list(zip(scores[top_k_indicies], all_doc_ids_arr[top_k_indicies]))
 
         return top_k_docs
 
@@ -804,16 +836,20 @@ class ShardWorker:
                 [],
             )
 
-        min_doc_id = np.min(doc_ids)
-        max_doc_id = np.max(doc_ids)
-        id_range = max_doc_id - min_doc_id + 1
-
-        temp_mask = np.ones(id_range, dtype=bool)
-        indices = doc_ids - min_doc_id
-
-        temp_mask[indices] = False
-        complement_doc_ids = np.where(temp_mask)[0]
-        complement_doc_ids += min_doc_id
+        if len(doc_ids) < (self.max_doc_id - self.min_doc_id) / 2:
+            doc_ids_set = set(doc_ids)
+            complement_doc_ids = np.array(
+                [
+                    doc_id
+                    for doc_id in range(self.min_doc_id, self.max_doc_id + 1)
+                    if doc_id not in doc_ids_set
+                ],
+                dtype=np.uint32,
+            )
+        else:
+            mask = np.ones(self.max_doc_id - self.min_doc_id + 1, dtype=bool)
+            mask[doc_ids - self.min_doc_id] = False
+            complement_doc_ids = np.where(mask)[0] + self.min_doc_id
 
         return (
             -1,
@@ -1082,9 +1118,7 @@ class OnDiskIndex(IndexBase):
         # self.doc_set = set(self.doc_fst.keys())  # enough mem??
         # self.doc_set = set()
 
-        self.num_workers = min(
-            index_builder_kwargs.get("num_workers", 4), os.cpu_count() - 1
-        )
+        self.num_workers = min(index_builder_kwargs.get("num_workers", 4), 4)
         self.doc_bounds, self.doc_stats = _load_doc_id_bounds(self.load_path)
         self.term_cache = TermCache()
 

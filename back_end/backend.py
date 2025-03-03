@@ -245,28 +245,36 @@ def retreival_function(query):
 # main driver function
 if __name__ == "__main__":
     import argparse
+    import multiprocessing
 
     parser = argparse.ArgumentParser(description="Search Engine")
-    parser.add_argument("--index-path", type=str, help="Path to load index")
+    parser.add_argument(
+        "--index-path",
+        type=str,
+        help="Path to load index",
+        default=".cache/index-doc-title-body-v2",
+    )
     parser.add_argument(
         "--embedding-path",
         type=str,
         help="Path to load embeddings",
-        default="retrieval_models/data/embedding2.pkl",
+        default=".cache/embedding2.pkl",
     )
     parser.add_argument(
         "--reranker-path",
         type=str,
         help="Path to load reranker embeddings",
-        default="/media/seanleishman/Disk/embeddings_v2",
+        default=".cache/embeddings_v2",
     )
     parser.add_argument("--port", type=int, default=8080, help="Port to run the server")
     args = parser.parse_args()
 
     # ENABLE ON WINDOWS IF USING MULTIPROCESSING
-    # multiprocessing.freeze_support()
-
+    multiprocessing.freeze_support()
     search_module = load_backend(
-        args.index_path, args.embedding_path, args.reranker_path
+        ".cache/index-doc-title-body-v2",
+        ".cache/embedding2.pkl",
+        ".cache/embeddings_v2",
     )
+
     app.run(host="0.0.0.0", port=args.port)
