@@ -64,6 +64,10 @@ This concerns the **BM25 model** for ranked retrieval with techniques such as em
 
 At the end it was decided that the two reranking models will be combined together, given weights of 0.6 for the **LM** and 0.4 for the **Metadata** reranking.
 
+## Tags Grouping
+Since the dataset contained ~40,000 unique tags, a grouping was done using  hierarchical agglomerative clustering with CodeBERT embeddings. Five clusters balanced silhouette scores and complexity. For naming, we used the TinyLlama model to generate descriptive labels: **Programming & Development Fundamentals, Software Engineering & System Design, Advanced Computing & Algorithms, Technologies & Frameworks,** and **Other**. Filtering is applied **post-retrieval** to refine results, avoiding inefficiencies from separate indexing.
+
+
 ## Evaluation
 
 Evaluating the system's performance in this case was a bit challenging as it operates in an unsupervised setting, without ground truth labels for relevance. This lead to the use of indirect and clustering-based metrics to assess the quality of the retrieved results
