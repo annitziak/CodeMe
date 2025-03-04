@@ -1,7 +1,0 @@
-data AND science
-machine AND learning OR programming
-"data science" 
-"data of science"
-#1(aritificial,intelligence)
-#10("prohramming,language")
-python not tensorflow

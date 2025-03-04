@@ -669,7 +669,7 @@ class ShardWorker:
                 all_doc_ids.update(doc_ids_set)
             else:
                 intersection = all_doc_ids.intersection(doc_ids_set)
-                if len(intersection) > 10:
+                if len(intersection) > 100:
                     all_doc_ids = intersection
 
         final_doc_ids = all_doc_ids
