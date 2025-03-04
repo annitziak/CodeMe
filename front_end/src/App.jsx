@@ -8,6 +8,8 @@ function App() {
       <Routes>
         <Route path="/" element={<SearchPage />} />
         <Route path="/results" element={<ResultsPage />} />
+        <Route path="/advanced_search" element={<ResultsPage />} />
+        <Route path="*" element={<h1>404 - Page Not Found</h1>} />
       </Routes>
     </Router>
   );

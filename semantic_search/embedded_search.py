@@ -40,7 +40,7 @@ class EmbeddingSearchIndex:
         if index_path and os.path.exists(index_path):
             print(f"Loading existing index from {index_path}")
             # Keeps the index in memory-mapped mode for faster loading
-            self.index = faiss.read_index(index_path, faiss.IO_FLAG_MMAP)
+            self.index = faiss.read_index(index_path)
             return self
 
         print("Building new FAISS index...")

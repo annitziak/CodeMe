@@ -67,7 +67,7 @@ def load_backend(
         vocab_fn=index.get_vocab,
         save_path=embedding_path,
     )
-    reranker = Reranker(load_dir=reranker_path)
+    reranker = Reranker(load_dir="C:/Users/DELL/Documents/GitHub/ttds_assignment/back_end/.cache/embeddings")
 
     return Search(index, preprocessor, embedding_model, reranker)
 

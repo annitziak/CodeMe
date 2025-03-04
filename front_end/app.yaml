@@ -1,0 +1,14 @@
+runtime: nodejs18  # Use Node.js 18 (or the latest supported version)
+
+handlers:
+  # Serve static assets (CSS, JS, images, fonts, etc.)
+  - url: /(.*\.(css|js|png|jpg|jpeg|svg|gif|ico|json|woff2?|ttf|otf))
+    static_files: dist/\1
+    upload: dist/(.*\.(css|js|png|jpg|jpeg|svg|gif|ico|json|woff2?|ttf|otf))
+    
+
+  # Serve index.html for all other routes (Single Page Application handling)
+  - url: /.*
+    static_files: dist/index.html
+    upload: dist/index.html
+    secure: always  # Ensures HTTPS
