@@ -53,12 +53,15 @@ def extract_search_args(request):
         options = data.get("options", {})
 
         selected_clusters = filters.get("tags", None)
-        reorder_date = filters.get("date", False)
+        reorder_date = bool(filters.get("date", False))
 
-        rerank_metadata = options.get("rerank_metadata", True)
-        rerank_lm = options.get("rerank_lm", True)
+        rerank_metadata = bool(options.get("rerank_metadata", True))
+        rerank_lm = bool(options.get("rerank_lm", True))
 
-        use_semantic = options.get("use_semantic", False)
+        use_semantic = bool(options.get("use_semantic", False))
+        boost_terms = bool(options.get("boost_terms", True))
+        expansion = bool(options.get("expansion", True))
+        k_word_expansion = int(options.get("k_word_expansion", 3))
     else:
         query = request.args.get("query")  # Extract query
         filters = request.args.getlist("filters")  # Extract multiple filter values
@@ -71,6 +74,9 @@ def extract_search_args(request):
         selected_clusters = request.args.get("tags", None)
         reorder_date = request.args.get("date", False)
         use_semantic = bool(request.args.get("use_semantic", False))
+        boost_terms = bool(request.args.get("boost_terms", True))
+        expansion = bool(request.args.get("expansion", True))
+        k_word_expansion = int(options.get("k_word_expansion", 3))
 
     if (
         selected_clusters is not None
@@ -88,6 +94,9 @@ def extract_search_args(request):
         "selected_clusters": selected_clusters,
         "reorder_date": reorder_date,
         "use_semantic": use_semantic,
+        "boost_terms": boost_terms,
+        "expansion": expansion,
+        "k_word_expansion": k_word_expansion,
     }
 
 
@@ -151,6 +160,9 @@ def search():
         selected_clusters=args["selected_clusters"],
         reorder_date=args["reorder_date"],
         use_semantic=args["use_semantic"],
+        boost_terms=args["boost_terms"],
+        expansion=args["expansion"],
+        k_word_expansion=args["k_word_expansion"],
     )
 
     return jsonify(
@@ -220,6 +232,9 @@ def advanced_search():
         rerank_metadata=args["rerank_metadata"],
         selected_clusters=args["selected_clusters"],
         reorder_date=args["reorder_date"],
+        boost_terms=args["boost_terms"],
+        expansion=args["expansion"],
+        k_word_expansion=args["k_word_expansion"],
     )
 
     return jsonify(

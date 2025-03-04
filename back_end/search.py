@@ -333,7 +333,7 @@ class Search:
         query,
         expansion=False,
         boost_terms=True,
-        k=10,
+        k_word_expansion=10,
         page=0,
         page_size=20,
         rerank_metadata=True,
