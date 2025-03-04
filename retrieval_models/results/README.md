@@ -5,7 +5,7 @@ These are preliminary results after testing on a smaller index, namely of about 
 |----------------|----------------|---------------|
 | TypeError: 'NoneType' object is not subscriptable in Python | 2.2356 | 0.0563 |
 | NullPointerException handling in Java | 2.5564 | 0.0927 |
-| ModuleNotFoundError: No module named 'requests' | 2.6116 | N/A |
+| ModuleNotFoundError: No module named 'requests' | 2.6116 | 0.055 |
 | Segmentation fault in C++ | 2.4958 | 0.0387 |
 | SyntaxError: invalid syntax near 'elif' | 2.5540 | 0.0733 |
 | Difference between DFS and BFS algorithms | 3.0122 | 0.0907 |
