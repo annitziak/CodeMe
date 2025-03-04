@@ -74,7 +74,7 @@ Evaluating the system's performance in this case was a bit challenging as it ope
 - Measured how focused the retrieved documents are compared to the corpus.
 - Higher clarity score indicates more relevant results.
 
-* Jaccard Score*
+*Jaccard Score:*
 - Measures how similar the retrieved documents are with each other.
 
 Ideally we want a high clarity and jaccard score. You can view the this analysis in the `results` file.
