@@ -76,7 +76,7 @@ def extract_search_args(request):
         use_semantic = bool(request.args.get("use_semantic", False))
         boost_terms = bool(request.args.get("boost_terms", True))
         expansion = bool(request.args.get("expansion", True))
-        k_word_expansion = int(options.get("k_word_expansion", 3))
+        k_word_expansion = int(request.args.get("k_word_expansion", 3))
 
     if (
         selected_clusters is not None
