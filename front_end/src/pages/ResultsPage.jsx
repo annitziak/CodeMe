@@ -56,7 +56,7 @@ const ResultsPage = () => {
       page_size: pageSize,
       searchType: advancedSearch ? "advanced" : "regular",
     },
-    { skip: !submittedQuery.trim() && selectedFilters.length !== 0 }
+    { skip: !submittedQuery.trim() && selectedFilters.length !== 0 && sortByDate}
   );
 
   // POST request (triggered when filters are applied)
