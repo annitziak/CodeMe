@@ -1,7 +1,7 @@
 # CodeMe
 
 This project was done as part of the course "Text Technologies for DS" in the University of Edinburgh. The core objective was to build a retrieval system designed to help developers
-efficiently find relevant code snippets and discussions. Built on a version of the Stack Overflow dump, the system indexes millions of questions, answers, and code snippets, ensuring comprehensive coverage of real-world programming queries for users. Utilizing efficient, scalable and storage-efficient indexing techniques, domain-specific preprocessing techniques and various advanced retrieval and reranking methods the system enables fast and accurate code searches. It incorporates a modern backend powered by Flask for efficient query processing and ranking and has an intuitive userinterface, offering interactive features such as filtering. The link for the search engine can be provided upon request to @annitziak
+efficiently find relevant code snippets and discussions. Built on a version of the Stack Overflow dump, the system indexes millions of questions, answers, and code snippets, ensuring comprehensive coverage of real-world programming queries for users. Utilizing efficient, scalable and storage-efficient indexing techniques, domain-specific preprocessing techniques and various advanced retrieval and reranking methods the system enables fast and accurate code searches. It incorporates a modern backend powered by Flask for efficient query processing and ranking and has an intuitive userinterface, offering interactive features such as filtering. The link for the search engine can be provided upon request.
 
 
 
