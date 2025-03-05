@@ -243,7 +243,9 @@ class IndexBuilder:
         index_merger.merge()
         index_merger.post_merge_cleanup()
 
-    def _process_posts_shard(self, shard: int, start: int, end: int, db_params: dict):
+    def _process_posts_shard(
+        self, shard: int, start: int, end: int, db_params: dict, include_answer=False
+    ):
         """
         Processes a shard of posts. Each batch is pre-processed and given to the DocumentShardedIndexBuilder to build the inverted index for the shard
         Once the shard id completed, the DocumentShardedIndexBuilder is flushed to disk via Obj.flush(shard)
@@ -269,11 +271,12 @@ class IndexBuilder:
             # include tags???
             debug = "LIMIT 100" if self.debug else ""
             select_query = f"""SELECT
-            id, title, body, creationdate, score, viewcount, owneruserid, ownerdisplayname, tags, answercount, commentcount, favoritecount, acceptedanswerid
-            FROM posts
-            WHERE id >= {start} AND id <= {end}
-            ORDER BY id ASC
-            {debug}"""  # AND posttypeid = 1
+            p.id, p.title, p.body, p.creationdate, p.score, p.viewcount, p.owneruserid, p.ownerdisplayname, p.tags, p.answercount, p.commentcount, p.favoritecount, u.reputation, p.acceptedanswerid
+            FROM posts p, users u
+            WHERE p.id >= {start} AND p.id <= {end} AND p.owneruserid = u.id AND posttypeid = 1
+
+            ORDER BY p.id ASC
+            {debug}"""  #
             cur.execute(select_query)
             logger.info(
                 "Processing shard %d: %d-%d with query %s",
@@ -295,7 +298,9 @@ class IndexBuilder:
                     post_id,
                     doc_terms,
                     doc_metadata,
-                ) in self._process_posts_batch(batch, conn, shard=shard):
+                ) in self._process_posts_batch(
+                    batch, conn, shard=shard, include_answer=include_answer
+                ):
                     if post_id < min_id:
                         min_id = post_id
                     if post_id > max_id:
@@ -308,7 +313,9 @@ class IndexBuilder:
 
         return index_builder.doc_count
 
-    def _process_posts_batch(self, rows: tuple[list], conn, shard=-1):
+    def _process_posts_batch(
+        self, rows: tuple[list], conn, shard=-1, include_answer=False
+    ):
         """
         A generator that processes a batch of posts and yields the post ID and document terms for each post
         This is called by _process_posts_shard to process a batch of posts for each shard
@@ -322,6 +329,40 @@ class IndexBuilder:
             postition_offset: int
         """
         body_limit = 30
+
+        post_ids = [row[0] for row in rows]
+
+        answers_by_question = {}
+        if post_ids:
+            cursor = conn.get_cursor()
+            post_ids_str = ",".join(str(pid) for pid in post_ids)
+            batch_query = f"""SELECT p.id, p.parentid,  p.title, p.body, p.creationdate, p.score, p.viewcount, p.owneruserid, p.ownerdisplayname, p.tags, p.answercount, p.commentcount, p.favoritecount, u.reputation, p.acceptedanswerid
+            FROM posts p, users u
+            WHERE parentid IN ({post_ids_str}) AND posttypeid = 2"""
+
+            cursor.execute(batch_query)
+            all_answers = cursor.fetchall()
+
+            for (
+                answer_id,
+                parent_id,
+                answer_title,
+                answer_body,
+                *raw_metadata,
+            ) in all_answers:
+                has_accepted_answer = raw_metadata[-1] is not None
+                raw_metadata = raw_metadata[:-1]
+                doc_metadata = DocMetadata(*raw_metadata)
+                doc_metadata.doc_length = Stat(0)
+                doc_metadata.title = answer_title if answer_title is not None else ""
+                doc_metadata.hasacceptedanswer = has_accepted_answer
+
+                if parent_id not in answers_by_question:
+                    answers_by_question[parent_id] = []
+                answers_by_question[parent_id].append(
+                    (answer_id, answer_title, answer_body, doc_metadata)
+                )
+
         for row in rows:
             post_id, title, body, *raw_metadata = row
             '''
@@ -332,6 +373,7 @@ class IndexBuilder:
             cursor.execute(sql_query)
             answers = cursor.fetchall()
             '''
+            answers = answers_by_question.get(post_id, [])
 
             has_accepted_answer = raw_metadata[-1] is not None
             raw_metadata = raw_metadata[:-1]
@@ -345,53 +387,64 @@ class IndexBuilder:
             position_offset = 0
 
             answers = []
-            blocks = [("title", title), ("body", body)] + [
-                ("body", answer[2]) for answer in answers
-            ]
+            doc_metadatas = [doc_metadata]
+            all_blocks = [[("title", title), ("body", body)]]
+            for answer_id, answer_title, answer_body, doc_metadata in answers:
+                if include_answer:
+                    all_blocks[0].append(("body", answer_body))
+                else:
+                    all_blocks.append([("title", title), ("body", answer_body)])
+                    doc_metadatas.append(doc_metadata)
+
             body = []
 
-            for field, text in blocks:
-                if text is None:
-                    continue
+            for doc_metadata, blocks in zip(doc_metadatas, all_blocks):
+                for field, text in blocks:
+                    if text is None:
+                        continue
 
-                blocks, original_blocks = self._tokenize(
-                    text, field=field, return_original_text=True
-                )
-                for block in blocks:
-                    for word in block.words:
-                        if word.term not in doc_terms.keys():
-                            doc_terms[word.term] = [
-                                word.start_position + position_offset
-                                if word.start_position >= 0
-                                else -1
-                            ]
-                        else:
-                            doc_terms[word.term].append(
-                                word.start_position + position_offset
-                                if word.start_position >= 0
-                                else -1
-                            )
-                    position_offset += block.block_length
+                    blocks, original_blocks = self._tokenize(
+                        text, field=field, return_original_text=True
+                    )
+                    for block in blocks:
+                        for word in block.words:
+                            if word.term not in doc_terms.keys():
+                                doc_terms[word.term] = [
+                                    word.start_position + position_offset
+                                    if word.start_position >= 0
+                                    else -1
+                                ]
+                            else:
+                                doc_terms[word.term].append(
+                                    word.start_position + position_offset
+                                    if word.start_position >= 0
+                                    else -1
+                                )
+                        position_offset += block.block_length
 
-                for block in original_blocks:
-                    if len(body) < body_limit:
-                        if (
-                            isinstance(block, NormalTextBlock)
-                            or isinstance(block, CodeBlock)
-                            and block.in_line
-                        ):
-                            if block.text is None:
-                                continue
+                    for block in original_blocks:
+                        if len(body) < body_limit:
+                            if (
+                                isinstance(block, NormalTextBlock)
+                                or isinstance(block, CodeBlock)
+                                and block.in_line
+                            ):
+                                if block.text is None:
+                                    continue
 
-                            body += [
-                                x
-                                for x in block.text.split()
-                                if isinstance(x, str) and len(x.strip()) > 0
-                            ]
+                                if field == "body":
+                                    body += [
+                                        x
+                                        for x in block.text.split()
+                                        if isinstance(x, str) and len(x.strip()) > 0
+                                    ]
+                                elif field == "title":
+                                    title = block.text
 
-            doc_metadata.doc_length.update(position_offset, reset=True)
-            doc_metadata.body = " ".join(body)
-            yield post_id, doc_terms, doc_metadata
+                doc_metadata.doc_length.update(position_offset, reset=True)
+                doc_metadata.title = title if title is not None else ""
+                doc_metadata.body = " ".join(body)
+                yield post_id, doc_terms, doc_metadata
 
     def _tokenize(self, text: str, field: str = "body", *args, **kwargs):
         if field == "title":

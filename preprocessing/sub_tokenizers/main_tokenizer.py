@@ -1,11 +1,7 @@
 import re
 
-from tokenizers.pre_tokenizers import PreTokenizer, Whitespace, Sequence
 from copy import copy
 from preprocessing import Term
-from preprocessing.sub_tokenizers.bpe_code_tokenizer import (
-    CustomPreTokenizer,
-)
 
 DEFAULT_PUNCTUATION = r'([\[\]{}()<>().,;:=+\-*\/!@#$%^&~`#?\'"\\|])'
 PUNCTUATION_DOT = r'([\[\]{}()<>(),;:=+\-*\/!@#$%^&~`#?\'"\\|]|\.(?=\s))'
@@ -240,22 +236,7 @@ class MainTokenizer:
         self.contractions_behaviour = contractions_behaviour
         self.digit_behaviour = digit_behaviour
 
-        custom_pretokenizer = PreTokenizer.custom(CustomPreTokenizer())
-        self.pre_tokenizer = Sequence([custom_pretokenizer, Whitespace()])
-
         self.keep_split_words = {}
-
-    def __getstate__(self) -> object:
-        data = self.__dict__.copy()
-        del data["pre_tokenizer"]
-
-        return data
-
-    def __setstate__(self, state) -> None:
-        self.__dict__.update(state)
-
-        custom_pretokenizer = PreTokenizer.custom(CustomPreTokenizer())
-        self.pre_tokenizer = Sequence([custom_pretokenizer, Whitespace()])
 
     def __call__(self, *args, **kwargs):
         return self.tokenize(*args, **kwargs)

@@ -86,6 +86,7 @@ class DocMetadata:
     answercount: Stat
     commentcount: Stat
     favoritecount: Stat
+    userreputation: Stat
     hasacceptedanswer: bool = False
 
     title: str = ""
@@ -95,7 +96,7 @@ class DocMetadata:
     @staticmethod
     def default():
         return DocMetadata(
-            Stat(), Stat(), Stat(), Stat(), "", "", Stat(), Stat(), Stat()
+            Stat(), Stat(), Stat(), Stat(), "", "", Stat(), Stat(), Stat(), Stat()
         )
 
     @staticmethod
@@ -117,6 +118,10 @@ class DocMetadata:
             get_stat(json_data, "answercount"),
             get_stat(json_data, "commentcount"),
             get_stat(json_data, "favoritecount"),
+            get_stat(json_data, "userreputation"),
+            False,
+            "",
+            "",
             get_stat(json_data, "doc_length"),
         )
 
@@ -139,6 +144,8 @@ class DocMetadata:
             return self.commentcount
         if key == "favoritecount":
             return self.favoritecount
+        if key == "userreputation":
+            return self.userreputation
         if key == "doc_length":
             return self.doc_length
         if key == "title":
@@ -162,6 +169,7 @@ class DocMetadata:
             **get_stat(self.answercount, "answercount"),
             **get_stat(self.commentcount, "commentcount"),
             **get_stat(self.favoritecount, "favoritecount"),
+            **get_stat(self.userreputation, "userreputation"),
             **get_stat(self.doc_length, "doc_length"),
         }
 
@@ -196,6 +204,8 @@ class DocMetadata:
             self.commentcount = Stat(self.commentcount)
         if not self.favoritecount or isinstance(self.favoritecount, int):
             self.favoritecount = Stat(self.favoritecount)
+        if not self.userreputation or isinstance(self.userreputation, int):
+            self.userreputation = Stat(self.userreputation)
         if not self.doc_length or isinstance(self.doc_length, int):
             self.doc_length = Stat(self.doc_length)
 
@@ -211,6 +221,8 @@ class DocMetadata:
             self.commentcount.value = max(0, self.commentcount.value)
         if self.favoritecount.value is not None:
             self.favoritecount.value = max(0, self.favoritecount.value)
+        if self.userreputation.value is not None:
+            self.userreputation.value = max(0, self.userreputation.value)
 
     def __len__(self):
         return 10
@@ -223,6 +235,7 @@ class DocMetadata:
         self.answercount.update(other.answercount)
         self.commentcount.update(other.commentcount)
         self.favoritecount.update(other.favoritecount)
+        self.userreputation.update(other.userreputation)
         self.doc_length.update(other.doc_length)
 
         self.tags = other.tags
@@ -245,6 +258,7 @@ class DocMetadata:
         answercount=None,
         commentcount=None,
         favoritecount=None,
+        userreputation=None,
         doc_length=None,
         hasacceptedanswer=False,
     ):
@@ -259,6 +273,7 @@ class DocMetadata:
         self.answercount.update(answercount)
         self.commentcount.update(commentcount)
         self.favoritecount.update(favoritecount)
+        self.userreputation.update(userreputation)
         self.doc_length.update(doc_length)
         self.hasacceptedanswer = hasacceptedanswer
 

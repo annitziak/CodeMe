@@ -64,7 +64,7 @@ class Reranker:
 
         return lm_documents
 
-    def fuse_scores(self, retrieved_documents, weights=(0.5, 0.25, 0.25)):
+    def fuse_scores(self, retrieved_documents, weights=(0, 0.6, 0.4)):
         if not retrieved_documents:
             return []
 
@@ -94,7 +94,7 @@ class Reranker:
             lm = (doc.get("lm_score", mid_lm) - min_lm) / diff_lm
             md = (doc.get("metadata_score", mid_md) - min_md) / diff_md
             doc["final_score_normalized"] = (
-                weights[0] * bm25 + weights[1] * lm + weights[2] * md
+                weights[0] * bm25 + weights[1] * (1 - lm) + weights[2] * md
             )
 
         retrieved_documents = sorted(
@@ -105,6 +105,12 @@ class Reranker:
 
     def rerank_metadata(self, retrieved_documents):
         "rerank the top retrieved documents based on metadata"
+
+        for doc in retrieved_documents:
+            # TEMP SOLUTION WITHOUT INDEX RUN
+            if len(doc.get("title", "")) == 0:
+                doc["metadata_score"] -= 1
+                continue
 
         return sorted(
             retrieved_documents, key=lambda x: x.get("metadata_score", 0), reverse=True
@@ -118,7 +124,7 @@ class Reranker:
 
         # Encode the query
         encoded_query_tokenized = self.tokenizer(
-            query, return_tensors="pt", padding=True, truncation=True
+            query, return_tensors="pt", truncation=True
         ).to(self.device)
         with torch.no_grad():
             outputs = self.model(**encoded_query_tokenized)
@@ -138,16 +144,12 @@ class Reranker:
 
             doc_embedding = self.lm_documents[doc_id]
 
-            # Compute cosine similarity
-            similarity = 1 - cosine(
-                encoded_query.flatten(), doc_embedding.flatten()
-            )  # Cosine similarity
+            similarity = 1 - cosine(encoded_query.flatten(), doc_embedding.flatten())
 
             doc["lm_score"] = similarity.item()
             reranked_documents.append(doc)
 
-        # Sort documents by similarity (higher is better)
-        reranked_documents.sort(key=lambda x: x["lm_score"], reverse=True)
+        reranked_documents.sort(key=lambda x: x["lm_score"], reverse=False)
 
         # Return only document IDs in sorted order
         return reranked_documents
@@ -160,26 +162,26 @@ class Reranker:
             encoded_query, doc_ids, k=len(retrieved_documents)
         )
 
-        reranked_documents.sort(key=lambda x: x["lm_score"], reverse=True)
+        reranked_documents.sort(key=lambda x: x["lm_score"], reverse=False)
         for idx, doc in enumerate(reranked_documents):
+            lm_score = (
+                doc["lm_score"].item()
+                if hasattr(doc["lm_score"], "item")
+                else doc["lm_score"]
+            )
+
             doc.update(doc_map[doc["doc_id"]])
+            doc["lm_score"] = lm_score
 
         return reranked_documents
 
-    def _rerank_lm_sentence_transformer(self, retrieved_documents, query):
-        "rerank the top retrieved documents based on language model using sentence transformer"
-        # Encode the query
-        encoded_query = self.model.encode(query, convert_to_tensor=True).cpu()
-        doc_map = {doc["doc_id"]: doc for doc in retrieved_documents}
-        doc_ids = [x["doc_id"] for x in retrieved_documents]
-        reranked_documents = self.lm_documents.search_filtered(
-            encoded_query, doc_ids, k=len(retrieved_documents)
+    def semantic_search(self, query, top_k=10):
+        "rerank the top retrieved documents based on language model"
+        query = self.model.encode(query, convert_to_tensor=True).cpu()
+
+        retrieved_documents = self.lm_documents.search(query, top_k)
+        retrieved_documents = sorted(
+            retrieved_documents, key=lambda x: x.get("lm_score", 0), reverse=True
         )
 
-        # Sort documents by similarity (higher is better)
-        reranked_documents.sort(key=lambda x: x["lm_score"], reverse=True)
-        for idx, doc in enumerate(reranked_documents):
-            doc.update(doc_map[doc["doc_id"]])
-
-        # Return only document IDs in sorted order
-        return reranked_documents
+        return retrieved_documents

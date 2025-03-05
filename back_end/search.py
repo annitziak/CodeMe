@@ -1,6 +1,7 @@
 import time
 import os
 import logging
+import multiprocessing
 
 
 from preprocessing.preprocessor import Preprocessor
@@ -56,6 +57,8 @@ def load_backend(
     if index_path is None or not os.path.exists(index_path):
         logger.error(f"Index path {index_path} does not exist. Using mock data")
         return Search.mock()
+
+    multiprocessing.set_start_method("spawn", force=True)
 
     index = Index(load_path=index_path)
     preprocessor = Preprocessor(parser_kwargs={"parser_type": "raw"})
@@ -133,8 +136,9 @@ class Search:
         )
 
         self.cache = SearchCache()
+        self.post_cache = SearchCache()
 
-    def _pre_search(self, query, expansion=False, boost_terms=True, k=10):
+    def _pre_search(self, query, expansion=False, boost_terms=True, k=3):
         logger.info(f"Preprocessing query: {query}")
         tokens = self.preprocessor.preprocess(query, return_words=True)
 
@@ -165,39 +169,96 @@ class Search:
         )
 
         start_idx = page * page_size
-        end_idx = start_idx + 500
+        end_idx = (page + 1) * page_size
+        apply_reranking = (rerank_metadata or rerank_lm) and start_idx < 200
 
-        results = results[start_idx:end_idx]
-        if end_idx < total_results:
-            return_result.has_next = True
-        if start_idx > 0:
-            return_result.has_prev = True
-
-        return_result.results = self.format_results(results)
+        return_result.total_results = total_results
         return_result.query = query
 
-        logger.info(f"Result from index after clipping: {return_result}")
+        if end_idx < total_results:
+            if len(return_result.results) < page_size:
+                return_result.has_next = False
+            else:
+                return_result.has_next = True
+        if page > 0:
+            return_result.has_prev = True
+
+        if apply_reranking:
+            if query in self.post_cache:
+                logger.info(f"Result from cache {query}: {return_result}")
+                return_result.results = self.post_cache[query]
+            else:
+                return_result.results = []
+                for i in range(0, len(results), 200):
+                    rerank_subset = results[i : i + 200]
+                    return_result.results += self.format_results(rerank_subset)
+
+                    if len(return_result.results) >= 200:
+                        break
+
+                logger.info(
+                    f"Reranking top 200 results for query {len(return_result.results)} : {return_result}"
+                )
+
+                return_result.results = reorder_as_per_filter(
+                    return_result.results,
+                    selected_clusters=selected_clusters,
+                    reorder_date=reorder_date,
+                )
+
+                logger.info(
+                    f"Reordered results: {return_result} to {len(return_result.results)}"
+                )
+
+                if rerank_metadata:
+                    return_result.results = self.reranker.rerank_metadata(
+                        return_result.results
+                    )
+                    logger.info(
+                        f"Reranked with metadata: {return_result} to {len(return_result.results)}"
+                    )
+                if rerank_lm:
+                    return_result.results = self.reranker.rerank_lm(
+                        return_result.results, query
+                    )
+                    logger.info(
+                        f"Reranked with LM: {return_result} to {len(return_result.results)}"
+                    )
+
+                return_result.results = self.reranker.fuse_scores(return_result.results)
+                logger.info(
+                    f"Fused scores: {return_result} to {len(return_result.results)}"
+                )
+
+                self.post_cache[query] = return_result.results
+
+            if end_idx < 200:
+                logger.info("Entire page of results is in top 200")
+                return_result.results = return_result.results[start_idx:end_idx]
+            else:
+                logger.info("Page of results is not in top 200")
+                if start_idx < 200:
+                    first_part = return_result.results[start_idx:200]
+                    remainder_start = 200
+                    remainder_end = end_idx
+                    second_part = self.format_results(
+                        results[remainder_start:remainder_end]
+                    )
+                    return_result.results = first_part + second_part
+                else:
+                    return_result.results = self.format_results(
+                        results[start_idx:end_idx]
+                    )
+        else:
+            logger.info("No reranking applied")
+            return_result.results = self.format_results(results[start_idx:end_idx])
+
         return_result.results = reorder_as_per_filter(
             return_result.results,
-            selected_clusters=selected_clusters,
             reorder_date=reorder_date,
         )
-
-        if rerank_metadata:
-            return_result.results = self.reranker.rerank_metadata(return_result.results)
-            logger.info(f"Reranked with metadata: {return_result}")
-        if rerank_lm:
-            return_result.results = self.reranker.rerank_lm(
-                return_result.results, query
-            )
-            logger.info(f"Reranked with LM: {return_result}")
-
-        return_result.results = self.reranker.fuse_scores(return_result.results)
-        return_result.results = return_result.results[:page_size]
-
-        return_result.results = reorder_as_per_filter(
-            return_result.results,
-            reorder_date=reorder_date,
+        logger.info(
+            f"Reordered results: {return_result} to {len(return_result.results)}"
         )
 
         return return_result
@@ -205,32 +266,52 @@ class Search:
     def search(
         self,
         query,
-        expansion=False,
+        expansion=True,
         boost_terms=True,
         rerank_metadata=True,
         rerank_lm=True,
         page=0,
         page_size=20,
-        k_word_expansion=10,
+        k_word_expansion=3,
         selected_clusters=None,
         reorder_date=False,
-        word_limit=WORD_LIMIT_SEARCH,
+        use_semantic=False,
     ) -> SearchResult:
         start = time.time()
 
         tokens = self._pre_search(query, expansion, boost_terms, k=k_word_expansion)
 
-        query = FreeTextQuery(tokens, word_limit=word_limit)
+        if use_semantic:
+            logger.info("Using semantic search")
+            results = self.reranker.semantic_search(query, top_k=(page + 1) * page_size)
+            logger.info(f"Semantic search results: {results}")
+            return_result = SearchResult(
+                results=results,
+                query=query,
+                time_taken=time.time() - start,
+                total_results=len(results),
+            )
+            return_result.results = self.format_results(results)
+            return_result.results = reorder_as_per_filter(
+                return_result.results,
+                selected_clusters=selected_clusters,
+                reorder_date=reorder_date,
+            )
+            return_result.results = return_result.results[
+                page * page_size : (page + 1) * page_size
+            ]
+            return return_result
+
+        free_text_query = FreeTextQuery(tokens)
         if query in self.cache:
             results = self.cache[query]
         else:
-            results = self.index.search(query)
+            results = self.index.search(free_text_query)
             self.cache[query] = results
-
-        results += self._backfill_results(page_size - len(results))
 
         ret = self._post_search(
             results,
+            query=query,
             rerank_metadata=rerank_metadata,
             rerank_lm=rerank_lm,
             page=page,
@@ -238,8 +319,9 @@ class Search:
             selected_clusters=selected_clusters,
             reorder_date=reorder_date,
         )
-
+        ret = self._backfill_results(ret, page_size - len(results))
         ret.time_taken = time.time() - start
+
         logger.info(
             f"Search took {ret.time_taken} seconds to return {ret.total_results} results."
         )
@@ -251,7 +333,7 @@ class Search:
         query,
         expansion=False,
         boost_terms=True,
-        k=10,
+        k_word_expansion=10,
         page=0,
         page_size=20,
         rerank_metadata=True,
@@ -259,19 +341,20 @@ class Search:
         reorder_date=False,
     ):
         start = time.time()
-        query = BooleanQuery(query, preprocessor=self.preprocessor)
-        query.parse()
-        logger.info(f"Query after preprocessing: \n{query._ppformat()}")
+        boolean_query = BooleanQuery(query, preprocessor=self.preprocessor)
+        boolean_query.parse()
+        logger.info(f"Query after preprocessing: \n{boolean_query._ppformat()}")
 
         if query in self.cache:
+            logger.info(f"Result from cache {query} of length {len(self.cache[query])}")
             results = self.cache[query]
         else:
-            results = self.index.search(query)
+            results = self.index.search(boolean_query)
             self.cache[query] = results
 
-        results += self._backfill_results(page_size - len(results))
         ret = self._post_search(
             results,
+            query=query,
             page=page,
             page_size=page_size,
             rerank_metadata=rerank_metadata,
@@ -279,8 +362,11 @@ class Search:
             selected_clusters=selected_clusters,
             reorder_date=reorder_date,
         )
-
+        logger.info(f"Result from index: {ret}")
+        # DO NOT BACKFILL FOR ADVANCED SEARCH
+        # ret = self._backfill_results(ret, page_size - len(results))
         ret.time_taken = time.time() - start
+
         logger.info(
             f"Search took {ret.time_taken} seconds to return {ret.total_results} results."
         )
@@ -290,14 +376,27 @@ class Search:
     def format_results(self, results):
         ret = []
         for doc_result in results:
-            metadata = self.index.get_document_metadata(doc_result[1])
+            lm_score = 0
+            bm25_score = 0
+            id = 0
+            if isinstance(doc_result, tuple):
+                id = doc_result[1]
+                bm25_score = doc_result[0]
+            elif isinstance(doc_result, dict):
+                id = doc_result["id"]
+                lm_score = doc_result.get("lm_score", 0)
+            else:
+                raise ValueError(f"Unknown type for doc_result: {type(doc_result)}")
+
+            metadata = self.index.get_document_metadata(id)
             if metadata is None:
                 continue
 
             ret.append(
                 {
-                    "doc_id": to_py(doc_result[1]),
-                    "bm25_score": to_py(doc_result[0]),
+                    "doc_id": to_py(id),
+                    "bm25_score": to_py(bm25_score),
+                    "lm_score": to_py(lm_score),
                     "score": to_py(metadata["score"]),
                     "tags": metadata["tags"],
                     "ownerdisplayname": metadata["ownerdisplayname"],
@@ -314,14 +413,43 @@ class Search:
 
         return ret
 
-    def _backfill_results(self, num_results, query_type=FreeTextQuery):
+    def _backfill_results(
+        self,
+        ret,
+        num_results,
+        query_type=FreeTextQuery,
+        selected_clusters=None,
+        reorder_date=False,
+    ):
         if num_results <= 0:
-            return []
+            return ret
 
-        tokens = self._pre_search("python")
-        query = query_type(tokens, preprocessor=self.preprocessor)
-        results = self.index.search(query)
-        return results[:num_results]
+        # Do semantic search first
+        try:
+            results = self.reranker.semantic_search(ret.query, top_k=num_results * 50)
+            if len(results) < num_results * 50:
+                tokens = self._pre_search("python")
+                query = query_type(tokens, preprocessor=self.preprocessor)
+                results += self.index.search(query)[: num_results * 50]
+        except Exception as e:
+            logger.error(f"Error in semantic search: {e}")
+            tokens = self._pre_search("python and machine learning")
+            query = query_type(tokens, preprocessor=self.preprocessor)
+            results = self.index.search(query)[: num_results * 50]
+
+        results = self.format_results(results)
+        results = reorder_as_per_filter(
+            results,
+            selected_clusters=selected_clusters,
+            reorder_date=reorder_date,
+        )
+        results = results[:num_results]
+
+        ret.results += results
+        ret.total_results += len(results)
+
+        print("Backfilled results", ret)
+        return ret
 
     @staticmethod
     def default():

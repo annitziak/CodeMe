@@ -44,6 +44,8 @@ class EmbeddingModel:
             self.embeddings = self.precompute_vocab_embeddings(batch_size=100)
             self.save_embeddings()
 
+        self.index_to_word = {i: word for word, i in self.word_to_index.items()}
+
     def save_embeddings(self):
         """Saves the precomputed embeddings and word-to-index mapping to a .pkl file."""
         self.word_to_index = {
@@ -87,7 +89,9 @@ class EmbeddingModel:
             np.ndarray: A 2D array of word embeddings.
         """
         embeddings = []
-        self.vocab = self.vocab_fn() if self.vocab_fn is not None else self.vocab
+        self.vocab = (
+            self.vocab_fn(top_p=0.20) if self.vocab_fn is not None else self.vocab
+        )
         total_words = len(self.vocab)
 
         for i in tqdm.tqdm(
@@ -147,12 +151,11 @@ class EmbeddingModel:
             0
         ]  # Compute similarities
 
+        top_indices = np.argsort(similarities)[::-1][1 : top_k + 1]
+
         top_indices = np.argsort(similarities)[::-1][
             1 : top_k + 1
         ]  # Skip the first as it's the same word
-        print(top_indices)
 
-        similar_words = [
-            self.vocab[i] for i in top_indices
-        ]  # Retrieve most similar words
+        similar_words = [self.index_to_word[i] for i in top_indices]
         return similar_words

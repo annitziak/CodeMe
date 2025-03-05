@@ -37,6 +37,7 @@ def read_doc(
         raw_tag_size, tags = 0, ""
         creation_date = 0
         has_accepted_answer = 0
+        user_reputation = 0
         raw_body_size, body = 0, ""
         raw_title_size, title = 0, ""
 
@@ -112,6 +113,11 @@ def read_doc(
                 sub_shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_hasacceptedanswer"]]),
             )[0]
 
+            user_reputation = struct.unpack(
+                SIZE_KEY["doc_userreputation"],
+                sub_shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_userreputation"]]),
+            )[0]
+
             raw_title_size = struct.unpack(
                 SIZE_KEY["doc_title"],
                 sub_shard_f.read(READ_SIZE_KEY[SIZE_KEY["doc_title"]]),
@@ -144,6 +150,7 @@ def read_doc(
             logger.error(f"Doc Tags: {tags}")
             logger.error(f"Doc Creation Date: {creation_date}")
             logger.error(f"Doc Has Accepted Answer: {has_accepted_answer}")
+            logger.error(f"Doc User Reputation: {user_reputation}")
             logger.error(f"Doc Title: {raw_title_size}")
             logger.error(f"Doc Title: {title}")
             logger.error(f"Doc Body: {raw_body_size}")
@@ -163,6 +170,7 @@ def read_doc(
                 answercount=answer_count,
                 commentcount=comment_count,
                 favoritecount=favorite_count,
+                userreputation=user_reputation,
                 minmax_dict=minmax_stat,
             )
         shard_f.write(struct.pack(SIZE_KEY["doc_metadatascore"], doc_custom_score))
@@ -181,6 +189,7 @@ def read_doc(
         shard_f.write(
             struct.pack(SIZE_KEY["doc_hasacceptedanswer"], has_accepted_answer)
         )
+        shard_f.write(struct.pack(SIZE_KEY["doc_userreputation"], user_reputation))
         shard_f.write(struct.pack(SIZE_KEY["doc_title"], raw_title_size))
         shard_f.write(title.encode("utf-8"))
         shard_f.write(struct.pack(SIZE_KEY["doc_body"], raw_body_size))
@@ -195,5 +204,6 @@ def read_doc(
             answercount=answer_count,
             commentcount=comment_count,
             favoritecount=favorite_count,
+            userreputation=user_reputation,
         )
     return docs_offset, docs_metadata

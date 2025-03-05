@@ -2,7 +2,7 @@ DEFAULT_WEIGHTS = {
     "score": 1.5,
     "viewcount": 1.2,
     "creationdate": 1.5,
-    "reputationuser": 1.5,
+    "userreputation": 1.5,
 }
 
 
@@ -14,10 +14,10 @@ def normalize(data, minmax_dict, key):
         return 0
     if max_key not in minmax_dict:
         return 0
-    
+
     if minmax_dict[max_key] == minmax_dict[min_key]:
         return 0
-    
+
     return (data - minmax_dict[min_key]) / (minmax_dict[max_key] - minmax_dict[min_key])
 
 
@@ -25,7 +25,7 @@ def metadata_score(
     score=0,
     viewcount=0,
     creationdate=0,
-    reputationuser=0,
+    userreputation=0,
     answercount=0,
     commentcount=0,
     favoritecount=0,
@@ -42,10 +42,10 @@ def metadata_score(
             normalize(creationdate, minmax_dict, "creationdate")
             * weights["creationdate"]
         )
-    if "reputationuser" in weights:
+    if "userreputation" in weights:
         score += (
-            normalize(reputationuser, minmax_dict, "reputationuser")
-            * weights["reputationuser"]
+            normalize(userreputation, minmax_dict, "userreputation")
+            * weights["userreputation"]
         )
 
     return score

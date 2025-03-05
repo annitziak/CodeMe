@@ -26,6 +26,7 @@ SIZE_KEY = {
     "doc_creationdate": "<I",
     "doc_metadatascore": "<f",
     "doc_hasacceptedanswer": "<H",
+    "doc_userreputation": "<I",
     "doc_title": "<I",
     "doc_body": "<I",
 }

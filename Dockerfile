@@ -7,9 +7,10 @@ EXPOSE 8080
 WORKDIR /ttds_assignment
 
 COPY requirements.txt requirements.txt
+RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 RUN pip install -r requirements.txt
 
 COPY . .
 
 RUN pip install -e .
-CMD [ "python", "-m" , "flask", "--app","back_end/backend","run","--host=0.0.0.0","--port=8080"]
+CMD ["python", "back_end/backend.py"]

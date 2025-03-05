@@ -53,10 +53,15 @@ def extract_search_args(request):
         options = data.get("options", {})
 
         selected_clusters = filters.get("tags", None)
-        reorder_date = filters.get("date", False)
+        reorder_date = bool(filters.get("date", False))
 
-        rerank_metadata = options.get("rerank_metadata", True)
-        rerank_lm = options.get("rerank_lm", True)
+        rerank_metadata = bool(options.get("rerank_metadata", True))
+        rerank_lm = bool(options.get("rerank_lm", True))
+
+        use_semantic = bool(options.get("use_semantic", False))
+        boost_terms = bool(options.get("boost_terms", True))
+        expansion = bool(options.get("expansion", True))
+        k_word_expansion = int(options.get("k_word_expansion", 3))
     else:
         query = request.args.get("query")  # Extract query
         filters = request.args.getlist("filters")  # Extract multiple filter values
@@ -68,6 +73,10 @@ def extract_search_args(request):
 
         selected_clusters = request.args.get("tags", None)
         reorder_date = request.args.get("date", False)
+        use_semantic = bool(request.args.get("use_semantic", False))
+        boost_terms = bool(request.args.get("boost_terms", True))
+        expansion = bool(request.args.get("expansion", True))
+        k_word_expansion = int(request.args.get("k_word_expansion", 3))
 
     if (
         selected_clusters is not None
@@ -84,6 +93,10 @@ def extract_search_args(request):
         "rerank_lm": rerank_lm,
         "selected_clusters": selected_clusters,
         "reorder_date": reorder_date,
+        "use_semantic": use_semantic,
+        "boost_terms": boost_terms,
+        "expansion": expansion,
+        "k_word_expansion": k_word_expansion,
     }
 
 
@@ -106,6 +119,7 @@ def search():
             boost_terms: bool
             rerank_metadata: bool [default: False]
             rerank_lm: bool [default: False]
+            use_semantic: bool [default: False]
         ]
     Structure of the response:
         results: list[
@@ -129,6 +143,7 @@ def search():
         total_results: int # Total number from the search (not on the page)
         has_next: bool
         has_prev: bool
+        time_taken: float
 
     Error Codes:
         200: OK
@@ -144,6 +159,10 @@ def search():
         rerank_metadata=args["rerank_metadata"],
         selected_clusters=args["selected_clusters"],
         reorder_date=args["reorder_date"],
+        use_semantic=args["use_semantic"],
+        boost_terms=args["boost_terms"],
+        expansion=args["expansion"],
+        k_word_expansion=args["k_word_expansion"],
     )
 
     return jsonify(
@@ -154,6 +173,7 @@ def search():
             "has_next": result.has_next,
             "has_prev": result.has_prev,
             "total_results": result.total_results,
+            "time_taken": result.time_taken,
         }
     ), 200
 
@@ -212,6 +232,9 @@ def advanced_search():
         rerank_metadata=args["rerank_metadata"],
         selected_clusters=args["selected_clusters"],
         reorder_date=args["reorder_date"],
+        boost_terms=args["boost_terms"],
+        expansion=args["expansion"],
+        k_word_expansion=args["k_word_expansion"],
     )
 
     return jsonify(
@@ -222,6 +245,7 @@ def advanced_search():
             "has_next": result.has_next,
             "has_prev": result.has_prev,
             "total_results": result.total_results,
+            "time_taken": result.time_taken,
         }
     ), 200
 
@@ -245,28 +269,34 @@ def retreival_function(query):
 # main driver function
 if __name__ == "__main__":
     import argparse
+    import multiprocessing
 
     parser = argparse.ArgumentParser(description="Search Engine")
-    parser.add_argument("--index-path", type=str, help="Path to load index")
+    parser.add_argument(
+        "--index-path",
+        type=str,
+        help="Path to load index",
+        default=".cache/index-doc-title-body-v2",
+    )
     parser.add_argument(
         "--embedding-path",
         type=str,
         help="Path to load embeddings",
-        default="retrieval_models/data/embedding2.pkl",
+        default=".cache/embedding2.pkl",
     )
     parser.add_argument(
         "--reranker-path",
         type=str,
         help="Path to load reranker embeddings",
-        default="/media/seanleishman/Disk/embeddings_v2",
+        default=".cache/embeddings_v2",
     )
     parser.add_argument("--port", type=int, default=8080, help="Port to run the server")
     args = parser.parse_args()
 
     # ENABLE ON WINDOWS IF USING MULTIPROCESSING
-    # multiprocessing.freeze_support()
-
+    multiprocessing.freeze_support()
     search_module = load_backend(
         args.index_path, args.embedding_path, args.reranker_path
     )
+
     app.run(host="0.0.0.0", port=args.port)

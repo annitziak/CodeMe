@@ -48,8 +48,8 @@ class Index(IndexBase):
     def get_all_documents(self):
         return self.index.get_all_documents()
 
-    def get_vocab(self):
-        return self.index.get_vocab()
+    def get_vocab(self, top_p=0.2):
+        return self.index.get_vocab(top_p=top_p)
 
     def search(self, query: Query, limit: int = -1):
         if limit == -1:
