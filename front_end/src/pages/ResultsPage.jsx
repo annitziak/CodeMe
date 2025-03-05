@@ -44,15 +44,19 @@ const ResultsPage = () => {
   const isAdvancedSearch = location.pathname.includes("advanced_search");
   const [advancedSearch, setAdvancedSearch] = useState(isAdvancedSearch);
 
-  console.log(advancedSearch, "advanced search");
   const {
     data: getData,
     isLoading: getLoading,
     isFetching: getFetching,
     refetch,
   } = useSearchQuery(
-    { query: submittedQuery, page: initialPage, page_size: pageSize },
-    { skip: !submittedQuery.trim() }
+    {
+      query: submittedQuery,
+      page: initialPage,
+      page_size: pageSize,
+      searchType: advancedSearch ? "advanced" : "regular",
+    },
+    { skip: !submittedQuery.trim() && selectedFilters.length !== 0 }
   );
 
   // POST request (triggered when filters are applied)
@@ -75,7 +79,7 @@ const ResultsPage = () => {
         page_size: pageSize,
         searchType: advancedSearch ? "advanced" : "regular",
         filters: {
-          tag: selectedFilters,
+          tags: selectedFilters,
           date: sortByDate,
         },
       });
@@ -94,7 +98,11 @@ const ResultsPage = () => {
   const handleSearch = (e) => {
     e.preventDefault();
     setSubmittedQuery(inputQuery);
-    setSearchParams({ query: encodeURIComponent(inputQuery), page: 0 });
+    setSearchParams({
+      query: encodeURIComponent(inputQuery),
+      page: 0,
+      searchType: advancedSearch ? "advanced" : "regular",
+    });
   };
 
   const toggleFilter = (filter) => {
@@ -178,17 +186,27 @@ const ResultsPage = () => {
           )}
           <Button
             type="submit"
+            onClick={() => setAdvancedSearch(false)}
             className="h-[44px] px-6 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-all flex items-center justify-center"
           >
             Search
           </Button>
         </form>
-        <Button
-          onClick={() => setAdvancedSearch(true)}
-          className="h-[44px] px-6 bg-gray-200 text-gray-700 rounded-full hover:bg-gray-300 transition-all"
-        >
-          Advanced Search
-        </Button>
+        <div className="flex items-center space-x-2 justify-center lg:justify-start mt-4 lg:mt-0">
+          <Switch
+            id="advanced-search-toggle"
+            checked={advancedSearch}
+            onCheckedChange={(checked) => {
+              setAdvancedSearch(checked);
+              setSearchParams((prevParams) => {
+                const newParams = new URLSearchParams(prevParams);
+                newParams.set("searchType", checked ? "advanced" : "regular");
+                return newParams;
+              });
+            }}
+          />
+          <Label htmlFor="advanced-search-toggle">Advanced Search</Label>
+        </div>
       </div>
 
       {/* Mobile Filters */}
