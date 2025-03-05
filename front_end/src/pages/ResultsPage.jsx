@@ -48,6 +48,7 @@ const ResultsPage = () => {
     data: getData,
     isLoading: getLoading,
     isFetching: getFetching,
+    isError: getError,
     refetch,
   } = useSearchQuery(
     {
@@ -56,13 +57,21 @@ const ResultsPage = () => {
       page_size: pageSize,
       searchType: advancedSearch ? "advanced" : "regular",
     },
-    { skip: !submittedQuery.trim() && selectedFilters.length !== 0 && sortByDate}
+    {
+      skip:
+        !submittedQuery.trim() && selectedFilters.length !== 0 && sortByDate,
+    }
   );
 
   // POST request (triggered when filters are applied)
   const [
     searchWithFilters,
-    { data: postData, isLoading: postLoading, isFetching: postFetching },
+    {
+      data: postData,
+      isLoading: postLoading,
+      isFetching: postFetching,
+      isError: postError,
+    },
   ] = useSearchWithFiltersMutation();
 
   useEffect(() => {
@@ -145,6 +154,7 @@ const ResultsPage = () => {
   const isGetBusy = getLoading || getFetching;
   const isPostBusy = postLoading || postFetching;
   const isBusy = usePostResults ? isPostBusy : isGetBusy;
+  const isError = usePostResults ? postError : getError;
 
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-[#F5F7FA] to-[#E0E7EE]">
@@ -250,6 +260,10 @@ const ResultsPage = () => {
       {isBusy ? (
         <p className="text-blue-500 text-center mt-5 text-3xl">
           Loading results...
+        </p>
+      ) : isError ? (
+        <p className="text-red-500 text-center mt-5 text-3xl">
+          Bad request. Please try again.
         </p>
       ) : (
         <div className="flex flex-grow w-full max-w-7xl mx-auto mt-10 gap-8 pb-7 px-4 justify-center">
