@@ -49,6 +49,19 @@ BOOSTED_TERMS = {
 WORD_LIMIT_SEARCH = 20
 
 
+def hash_query(
+    query,
+    expansion=False,
+    boost_terms=True,
+    rerank_metadata=False,
+    rerank_lm=False,
+    selected_clusters=None,
+    reorder_date=False,
+):
+    selected_clusters = ",".join(selected_clusters) if selected_clusters else ""
+    return f"{query}-{int(expansion)}-{int(boost_terms)}-{int(rerank_metadata)}-{int(rerank_lm)}-{selected_clusters}-{int(reorder_date)}"
+
+
 def load_backend(
     index_path,
     embedding_path="retrieval_models/data/embedding2.pkl",
@@ -184,14 +197,27 @@ class Search:
             return_result.has_prev = True
 
         if apply_reranking:
-            if query in self.post_cache:
+            hashed_query = hash_query(
+                query,
+                rerank_metadata=rerank_metadata,
+                rerank_lm=rerank_lm,
+                selected_clusters=selected_clusters,
+                reorder_date=reorder_date,
+            )
+            if hashed_query in self.post_cache:
                 logger.info(f"Result from cache {query}: {return_result}")
-                return_result.results = self.post_cache[query]
+                return_result.results = self.post_cache[hashed_query]
             else:
                 return_result.results = []
                 for i in range(0, len(results), 200):
                     rerank_subset = results[i : i + 200]
                     return_result.results += self.format_results(rerank_subset)
+
+                    return_result.results = reorder_as_per_filter(
+                        return_result.results,
+                        selected_clusters=selected_clusters,
+                        reorder_date=reorder_date,
+                    )
 
                     if len(return_result.results) >= 200:
                         break
@@ -199,13 +225,6 @@ class Search:
                 logger.info(
                     f"Reranking top 200 results for query {len(return_result.results)} : {return_result}"
                 )
-
-                return_result.results = reorder_as_per_filter(
-                    return_result.results,
-                    selected_clusters=selected_clusters,
-                    reorder_date=reorder_date,
-                )
-
                 logger.info(
                     f"Reordered results: {return_result} to {len(return_result.results)}"
                 )
@@ -230,7 +249,7 @@ class Search:
                     f"Fused scores: {return_result} to {len(return_result.results)}"
                 )
 
-                self.post_cache[query] = return_result.results
+                self.post_cache[hashed_query] = return_result.results
 
             if end_idx < 200:
                 logger.info("Entire page of results is in top 200")
@@ -255,6 +274,7 @@ class Search:
 
         return_result.results = reorder_as_per_filter(
             return_result.results,
+            selected_clusters=selected_clusters if not apply_reranking else None,
             reorder_date=reorder_date,
         )
         logger.info(
@@ -303,11 +323,12 @@ class Search:
             return return_result
 
         free_text_query = FreeTextQuery(tokens)
-        if query in self.cache:
-            results = self.cache[query]
+        hashed_query = hash_query(query, expansion, boost_terms)
+        if hashed_query in self.cache:
+            results = self.cache[hashed_query]
         else:
             results = self.index.search(free_text_query)
-            self.cache[query] = results
+            self.cache[hashed_query] = results
 
         ret = self._post_search(
             results,
