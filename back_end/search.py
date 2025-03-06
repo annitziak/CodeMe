@@ -2,6 +2,7 @@ import time
 import os
 import logging
 import multiprocessing
+import re
 
 
 from preprocessing.preprocessor import Preprocessor
@@ -90,6 +91,8 @@ def reorder_as_per_filter(result, selected_clusters=None, reorder_date=False):
             result, selected_clusters
         )  # Reorder by selected cluster names
 
+    
+
     return result  # Return reordered results
 
 
@@ -126,6 +129,14 @@ class Search:
         self.reranker = reranker
 
         self.preprocessor = preprocessor
+        self.CLUSTER_MAPPINGS = {
+        1: "Programming & Development Fundamentals",
+        2: "Software Engineering & System Design",
+        3: "Advanced Computing & Algorithms",
+        4: "Technologies & Frameworks",
+        5: "Other",
+    }
+        self.CLUSTER_MAPPING = self.parse_clusters_from_file("./retrieval_models/data/clustering_results.txt")
         boosted_terms = [
             self.preprocessor.preprocess(term, return_words=True)
             for term in BOOSTED_TERMS
@@ -372,6 +383,44 @@ class Search:
         )
 
         return ret
+    
+    def parse_clusters_from_file(self,file_path):
+
+        cluster_mapping = {
+            cluster_name: set() for cluster_name in self.CLUSTER_MAPPINGS.values()
+        }
+        current_cluster = None
+
+        with open(file_path, "r", encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue  # Skip empty lines
+
+                # Check if the line starts with a cluster header
+                cluster_match = re.match(r"Cluster (\d+) \(\d+ tags\):", line)
+                if cluster_match:
+                    cluster_id = int(cluster_match.group(1))
+                    cluster_name = self.CLUSTER_MAPPINGS.get(cluster_id)
+    
+                    if cluster_name:
+                        current_cluster = cluster_name
+                    else:
+                        current_cluster = None  # Skip if the cluster ID is invalid
+                elif current_cluster:
+                    # Add tags to the current cluster (split by commas)
+                    tags = [tag.strip() for tag in line.split(",") if tag.strip()]
+                    cluster_mapping[current_cluster].update(tags)
+
+        return cluster_mapping
+
+    def get_cluster_from_tag(self,tags):
+      cluster_list = []
+      for tag in tags:  # `tags` is already a list of tag names
+        for key, values in self.CLUSTER_MAPPING.items():
+            if tag in values:
+                cluster_list.append(key)
+      return set(cluster_list)  # Remove duplicates
 
     def format_results(self, results):
         ret = []
@@ -392,6 +441,8 @@ class Search:
             if metadata is None:
                 continue
 
+            cluster_list=self.get_cluster_from_tag(metadata["tags"])
+
             ret.append(
                 {
                     "doc_id": to_py(id),
@@ -399,6 +450,7 @@ class Search:
                     "lm_score": to_py(lm_score),
                     "score": to_py(metadata["score"]),
                     "tags": metadata["tags"],
+                    "cluster_tags": cluster_list,
                     "ownerdisplayname": metadata["ownerdisplayname"],
                     "creation_date": to_py(metadata["creationdate"]),
                     "view_count": to_py(metadata["viewcount"]),
