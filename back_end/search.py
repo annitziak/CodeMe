@@ -104,8 +104,6 @@ def reorder_as_per_filter(result, selected_clusters=None, reorder_date=False):
             result, selected_clusters
         )  # Reorder by selected cluster names
 
-    
-
     return result  # Return reordered results
 
 
@@ -143,13 +141,15 @@ class Search:
 
         self.preprocessor = preprocessor
         self.CLUSTER_MAPPINGS = {
-        1: "Programming & Development Fundamentals",
-        2: "Software Engineering & System Design",
-        3: "Advanced Computing & Algorithms",
-        4: "Technologies & Frameworks",
-        5: "Other",
-    }
-        self.CLUSTER_MAPPING = self.parse_clusters_from_file("./retrieval_models/data/clustering_results.txt")
+            1: "Programming & Development Fundamentals",
+            2: "Software Engineering & System Design",
+            3: "Advanced Computing & Algorithms",
+            4: "Technologies & Frameworks",
+            5: "Other",
+        }
+        self.CLUSTER_MAPPING = self.parse_clusters_from_file(
+            "./retrieval_models/data/clustering_results.txt"
+        )
         boosted_terms = [
             self.preprocessor.preprocess(term, return_words=True)
             for term in BOOSTED_TERMS
@@ -404,9 +404,8 @@ class Search:
         )
 
         return ret
-    
-    def parse_clusters_from_file(self,file_path):
 
+    def parse_clusters_from_file(self, file_path):
         cluster_mapping = {
             cluster_name: set() for cluster_name in self.CLUSTER_MAPPINGS.values()
         }
@@ -423,7 +422,7 @@ class Search:
                 if cluster_match:
                     cluster_id = int(cluster_match.group(1))
                     cluster_name = self.CLUSTER_MAPPINGS.get(cluster_id)
-    
+
                     if cluster_name:
                         current_cluster = cluster_name
                     else:
@@ -435,13 +434,15 @@ class Search:
 
         return cluster_mapping
 
-    def get_cluster_from_tag(self,tags):
-      cluster_list = []
-      for tag in tags:  # `tags` is already a list of tag names
-        for key, values in self.CLUSTER_MAPPING.items():
-            if tag in values:
-                cluster_list.append(key)
-      return set(cluster_list)  # Remove duplicates
+    def get_cluster_from_tag(self, tags):
+        cluster_list = set()
+        for tag in tags:  # `tags` is already a list of tag names
+            for key, values in self.CLUSTER_MAPPING.items():
+                if tag in values:
+                    cluster_list.add(key)
+                    break
+
+        return list(cluster_list)  # Remove duplicates
 
     def format_results(self, results):
         ret = []
@@ -462,7 +463,7 @@ class Search:
             if metadata is None:
                 continue
 
-            cluster_list=self.get_cluster_from_tag(metadata["tags"])
+            cluster_list = self.get_cluster_from_tag(metadata["tags"].split("|"))
 
             ret.append(
                 {

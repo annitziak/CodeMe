@@ -10,6 +10,7 @@ import logging
 import psutil
 import numpy as np
 import heapq
+import gc
 
 from numba import jit, uint16, uint32, int64, types, prange
 from concurrent.futures import ProcessPoolExecutor
@@ -346,7 +347,7 @@ class TermCache:
     def __init__(self):
         self.cache = OrderedDict()
         self.freq_threshold = 10_000
-        self.max_size = 1_000_000
+        self.max_size = 1000
 
     def get(self, term: str, positions=False):
         return self.cache.get((term, positions), None)
@@ -358,11 +359,13 @@ class TermCache:
         if term_obj.document_frequency > self.freq_threshold:
             self.cache[(term, positions)] = term_obj
 
+        assert len(self.cache) <= self.max_size
+
 
 class DocLengthCache:
     def __init__(self):
         self.cache = OrderedDict()
-        self.max_size = 1_000_000
+        self.max_size = 1000
 
     def get(self, doc_id: int):
         return self.cache.get(doc_id, None)
@@ -372,6 +375,7 @@ class DocLengthCache:
             self.cache.popitem(last=False)
 
         self.cache[doc_id] = doc_length
+        assert len(self.cache) <= self.max_size
 
 
 class ShardWorker:
@@ -1337,7 +1341,7 @@ class OnDiskIndex(IndexBase):
         """
         ret_list = []
         capacity = int(len(self.term_fst) * top_p)
-        for term in self.term_fst.keys():
+        for idx, term in enumerate(self.term_fst.keys()):
             if isinstance(term, bytes):
                 term = term.decode("utf-8")
 
@@ -1345,7 +1349,12 @@ class OnDiskIndex(IndexBase):
             if len(ret_list) < capacity:
                 heapq.heappush(ret_list, (doc_freq, term))
             else:
-                heapq.heappushpop(ret_list, (doc_freq, term))
+                if doc_freq > ret_list[0][0]:
+                    heapq.heappushpop(ret_list, (doc_freq, term))
+
+            if idx % 100_000 == 0:
+                print(f"Length of ret_list: {len(ret_list)} out of {capacity}")
+                gc.collect()
 
         return [x[1] for x in ret_list]
 
