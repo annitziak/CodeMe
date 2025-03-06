@@ -94,11 +94,13 @@ class Reranker:
             lm = (doc.get("lm_score", mid_lm) - min_lm) / diff_lm
             md = (doc.get("metadata_score", mid_md) - min_md) / diff_md
             doc["final_score_normalized"] = (
-                weights[0] * bm25 + weights[1] * (1 - lm) + weights[2] * md
+                weights[0] * bm25 + weights[1] * lm + weights[2] * md
             )
 
         retrieved_documents = sorted(
-            retrieved_documents, key=lambda x: x.get("final_score", 0), reverse=True
+            retrieved_documents,
+            key=lambda x: x.get("final_score_normalized", 0),
+            reverse=True,
         )
 
         return retrieved_documents
@@ -162,7 +164,7 @@ class Reranker:
             encoded_query, doc_ids, k=len(retrieved_documents)
         )
 
-        reranked_documents.sort(key=lambda x: x["lm_score"], reverse=False)
+        reranked_documents.sort(key=lambda x: x["lm_score"], reverse=True)
         for idx, doc in enumerate(reranked_documents):
             lm_score = (
                 doc["lm_score"].item()
