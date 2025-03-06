@@ -43,6 +43,14 @@ const ResultsPage = () => {
   const isAdvancedSearch = searchParams.get("searchType") === "advanced";
   const [advancedSearch, setAdvancedSearch] = useState(isAdvancedSearch);
 
+  const tagColors = [
+    "bg-blue-200 text-blue-700",
+    "bg-green-200 text-green-700",
+    "bg-yellow-200 text-yellow-700",
+    "bg-orange-200 text-orange-700",
+    "bg-purple-200 text-purple-700",
+  ];
+
   const {
     data: getData,
     isLoading: getLoading,
@@ -312,7 +320,9 @@ const ResultsPage = () => {
                       tag && (
                         <span
                           key={i}
-                          className="text-center bg-yellow-200 text-yellow-700 text-xs font-semibold px-2 py-1 rounded-full flex items-center space-x-1"
+                          className={`text-center text-xs font-semibold px-2 py-1 rounded-full flex items-center space-x-1 ${
+                            tagColors[i % tagColors.length]
+                          }`}
                         >
                           ✏️ {tag}
                         </span>
