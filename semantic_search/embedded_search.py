@@ -40,7 +40,8 @@ class EmbeddingSearchIndex:
         if index_path and os.path.exists(index_path):
             print(f"Loading existing index from {index_path}")
             # Keeps the index in memory-mapped mode for faster loading
-            self.index = faiss.read_index(index_path)
+            self.index = faiss.read_index(index_path, faiss.IO_FLAG_MMAP)
+            self.index.nprobe = 64
             return self
 
         print("Building new FAISS index...")
@@ -128,14 +129,16 @@ class EmbeddingSearchIndex:
         valid_indices = [self.doc_ids[doc_id] for doc_id in valid_ids]
         index_to_doc_id = {idx: doc_id for doc_id, idx in self.doc_ids.items()}
 
+        if len(valid_indices) < k:
+            valid_indices += [-1] * (k - len(valid_indices))
+
         id_selector = faiss.IDSelectorArray(valid_indices)
-        k_search = min(k, len(valid_indices))
         results = []
         seen_doc_ids = set()
 
-        if k_search != 0:
+        if k != 0:
             distances, indices = self.index.search(
-                query, k_search, params=faiss.SearchParametersIVF(sel=id_selector)
+                query, k, params=faiss.SearchParametersIVF(sel=id_selector)
             )
 
             for i, idx in enumerate(indices[0]):
@@ -148,8 +151,8 @@ class EmbeddingSearchIndex:
                     seen_doc_ids.add(doc_id)
 
                     embedding = self.index.reconstruct(idx)
-                    similarity = 1 - np.dot(embedding, query.flatten())
-                    results.append({"doc_id": doc_id, "lm_score": similarity})
+                    cosine_similarity = np.dot(embedding, query.flatten())
+                    results.append({"doc_id": doc_id, "lm_score": cosine_similarity})
                     continue
 
                 doc_id = index_to_doc_id[idx]
@@ -158,17 +161,14 @@ class EmbeddingSearchIndex:
                 similarity = float(distances[0][i])
                 results.append({"doc_id": doc_id, "lm_score": similarity})
 
-        max_score = 1.0
+        min_score = -1
         if results:
-            max_score = max(r["lm_score"] for r in results)
+            min_score = min(r["lm_score"] for r in results)
 
+        fallback_score = min_score - 0.1 if results else min_score
         for doc_id in missing_ids:
             if doc_id not in seen_doc_ids:
-                results.append({"doc_id": doc_id, "lm_score": max_score})
-
-        fallback_score = max_score + 0.1 if results else 1.0
-        for doc_id in missing_ids:
-            results.append({"doc_id": doc_id, "lm_score": fallback_score})
+                results.append({"doc_id": doc_id, "lm_score": fallback_score})
 
         results.sort(key=lambda x: x["lm_score"], reverse=True)
         return results[:k]

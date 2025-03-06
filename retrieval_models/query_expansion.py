@@ -76,9 +76,12 @@ class EmbeddingModel:
         inputs = self.tokenizer(
             words, return_tensors="pt", padding=True, truncation=True
         ).to(self.device)
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
         with torch.no_grad():
-            outputs = self.model(**inputs)
-        return outputs.last_hidden_state.mean(dim=1).cpu().numpy()
+            outputs = self.model(input_ids, attention_mask=attention_mask)
+            masked_embeddings = outputs.last_hidden_state * attention_mask.unsqueeze(-1)
+        return masked_embeddings.mean(dim=1).cpu().numpy()
 
     def precompute_vocab_embeddings(self, batch_size=50):
         """
@@ -89,8 +92,9 @@ class EmbeddingModel:
             np.ndarray: A 2D array of word embeddings.
         """
         embeddings = []
+        # 50'000 words 
         self.vocab = (
-            self.vocab_fn(top_p=0.20) if self.vocab_fn is not None else self.vocab
+            self.vocab_fn(top_p=0.005) if self.vocab_fn is not None else self.vocab
         )
         total_words = len(self.vocab)
 

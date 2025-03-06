@@ -2,6 +2,7 @@ import time
 import os
 import logging
 import multiprocessing
+import re
 
 
 from preprocessing.preprocessor import Preprocessor
@@ -47,6 +48,19 @@ BOOSTED_TERMS = {
     "stack",
 }
 WORD_LIMIT_SEARCH = 20
+
+
+def hash_query(
+    query,
+    expansion=False,
+    boost_terms=True,
+    rerank_metadata=False,
+    rerank_lm=False,
+    selected_clusters=None,
+    reorder_date=False,
+):
+    selected_clusters = ",".join(selected_clusters) if selected_clusters else ""
+    return f"{query}-{int(expansion)}-{int(boost_terms)}-{int(rerank_metadata)}-{int(rerank_lm)}-{selected_clusters}-{int(reorder_date)}"
 
 
 def load_backend(
@@ -126,6 +140,16 @@ class Search:
         self.reranker = reranker
 
         self.preprocessor = preprocessor
+        self.CLUSTER_MAPPINGS = {
+            1: "Programming & Development Fundamentals",
+            2: "Software Engineering & System Design",
+            3: "Advanced Computing & Algorithms",
+            4: "Technologies & Frameworks",
+            5: "Other",
+        }
+        self.CLUSTER_MAPPING = self.parse_clusters_from_file(
+            "./retrieval_models/data/clustering_results.txt"
+        )
         boosted_terms = [
             self.preprocessor.preprocess(term, return_words=True)
             for term in BOOSTED_TERMS
@@ -184,14 +208,27 @@ class Search:
             return_result.has_prev = True
 
         if apply_reranking:
-            if query in self.post_cache:
+            hashed_query = hash_query(
+                query,
+                rerank_metadata=rerank_metadata,
+                rerank_lm=rerank_lm,
+                selected_clusters=selected_clusters,
+                reorder_date=reorder_date,
+            )
+            if hashed_query in self.post_cache:
                 logger.info(f"Result from cache {query}: {return_result}")
-                return_result.results = self.post_cache[query]
+                return_result.results = self.post_cache[hashed_query]
             else:
                 return_result.results = []
                 for i in range(0, len(results), 200):
                     rerank_subset = results[i : i + 200]
                     return_result.results += self.format_results(rerank_subset)
+
+                    return_result.results = reorder_as_per_filter(
+                        return_result.results,
+                        selected_clusters=selected_clusters,
+                        reorder_date=reorder_date,
+                    )
 
                     if len(return_result.results) >= 200:
                         break
@@ -199,13 +236,6 @@ class Search:
                 logger.info(
                     f"Reranking top 200 results for query {len(return_result.results)} : {return_result}"
                 )
-
-                return_result.results = reorder_as_per_filter(
-                    return_result.results,
-                    selected_clusters=selected_clusters,
-                    reorder_date=reorder_date,
-                )
-
                 logger.info(
                     f"Reordered results: {return_result} to {len(return_result.results)}"
                 )
@@ -230,7 +260,7 @@ class Search:
                     f"Fused scores: {return_result} to {len(return_result.results)}"
                 )
 
-                self.post_cache[query] = return_result.results
+                self.post_cache[hashed_query] = return_result.results
 
             if end_idx < 200:
                 logger.info("Entire page of results is in top 200")
@@ -255,6 +285,7 @@ class Search:
 
         return_result.results = reorder_as_per_filter(
             return_result.results,
+            selected_clusters=selected_clusters if not apply_reranking else None,
             reorder_date=reorder_date,
         )
         logger.info(
@@ -303,11 +334,12 @@ class Search:
             return return_result
 
         free_text_query = FreeTextQuery(tokens)
-        if query in self.cache:
-            results = self.cache[query]
+        hashed_query = hash_query(query, expansion, boost_terms)
+        if hashed_query in self.cache:
+            results = self.cache[hashed_query]
         else:
             results = self.index.search(free_text_query)
-            self.cache[query] = results
+            self.cache[hashed_query] = results
 
         ret = self._post_search(
             results,
@@ -373,6 +405,45 @@ class Search:
 
         return ret
 
+    def parse_clusters_from_file(self, file_path):
+        cluster_mapping = {
+            cluster_name: set() for cluster_name in self.CLUSTER_MAPPINGS.values()
+        }
+        current_cluster = None
+
+        with open(file_path, "r", encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue  # Skip empty lines
+
+                # Check if the line starts with a cluster header
+                cluster_match = re.match(r"Cluster (\d+) \(\d+ tags\):", line)
+                if cluster_match:
+                    cluster_id = int(cluster_match.group(1))
+                    cluster_name = self.CLUSTER_MAPPINGS.get(cluster_id)
+
+                    if cluster_name:
+                        current_cluster = cluster_name
+                    else:
+                        current_cluster = None  # Skip if the cluster ID is invalid
+                elif current_cluster:
+                    # Add tags to the current cluster (split by commas)
+                    tags = [tag.strip() for tag in line.split(",") if tag.strip()]
+                    cluster_mapping[current_cluster].update(tags)
+
+        return cluster_mapping
+
+    def get_cluster_from_tag(self, tags):
+        cluster_list = set()
+        for tag in tags:  # `tags` is already a list of tag names
+            for key, values in self.CLUSTER_MAPPING.items():
+                if tag in values:
+                    cluster_list.add(key)
+                    break
+
+        return list(cluster_list)  # Remove duplicates
+
     def format_results(self, results):
         ret = []
         for doc_result in results:
@@ -392,6 +463,8 @@ class Search:
             if metadata is None:
                 continue
 
+            cluster_list = self.get_cluster_from_tag(metadata["tags"].split("|"))
+
             ret.append(
                 {
                     "doc_id": to_py(id),
@@ -399,6 +472,7 @@ class Search:
                     "lm_score": to_py(lm_score),
                     "score": to_py(metadata["score"]),
                     "tags": metadata["tags"],
+                    "cluster_tags": cluster_list,
                     "ownerdisplayname": metadata["ownerdisplayname"],
                     "creation_date": to_py(metadata["creationdate"]),
                     "view_count": to_py(metadata["viewcount"]),
