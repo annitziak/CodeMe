@@ -294,7 +294,7 @@ const ResultsPage = () => {
                   {result.body}
                 </p>
                 <div className="flex flex-wrap space-x-2 gap-y-2 mt-2">
-                  {result.tags.split("|").map(
+                  {result.cluster_tags.map(
                     (tag, i) =>
                       tag && (
                         <span
