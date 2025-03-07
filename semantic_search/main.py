@@ -142,6 +142,7 @@ class EmbedManager:
             sql_query = f"""
                 SELECT id, title, body
                 FROM posts
+                WHERE posttypeid = 1 AND title IS NOT NULL AND body IS NOT NULL AND score > 5 AND viewcount > 100
                 LIMIT {int(limit * top_p)}
             """
             logger.info(f"Query: {sql_query}")

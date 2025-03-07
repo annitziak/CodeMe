@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useSearchParams, useLocation } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import {
   useSearchQuery,
   useSearchWithFiltersMutation,
@@ -29,7 +29,6 @@ import {
 
 const ResultsPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const location = useLocation();
 
   const initialQuery = decodeURIComponent(searchParams.get("query") || "");
   const initialPage = parseInt(searchParams.get("page") || "0", 10);
@@ -41,8 +40,16 @@ const ResultsPage = () => {
   const [usePostResults, setUsePostResults] = useState(false);
   const [sortByDate, setSortByDate] = useState(false);
 
-  const isAdvancedSearch = location.pathname.includes("advanced_search");
+  const isAdvancedSearch = searchParams.get("searchType") === "advanced";
   const [advancedSearch, setAdvancedSearch] = useState(isAdvancedSearch);
+
+  const tagColors = [
+    "bg-blue-200 text-blue-700",
+    "bg-green-200 text-green-700",
+    "bg-yellow-200 text-yellow-700",
+    "bg-orange-200 text-orange-700",
+    "bg-purple-200 text-purple-700",
+  ];
 
   const {
     data: getData,
@@ -73,6 +80,10 @@ const ResultsPage = () => {
       isError: postError,
     },
   ] = useSearchWithFiltersMutation();
+
+  useEffect(() => {
+    setAdvancedSearch(searchParams.get("searchType") === "advanced");
+  }, [searchParams]);
 
   useEffect(() => {
     if (!submittedQuery.trim()) return;
@@ -107,10 +118,19 @@ const ResultsPage = () => {
   const handleSearch = (e) => {
     e.preventDefault();
     setSubmittedQuery(inputQuery);
-    setSearchParams({
-      query: encodeURIComponent(inputQuery),
-      page: 0,
-      searchType: advancedSearch ? "advanced" : "regular",
+
+    setSearchParams((prevParams) => {
+      const newParams = new URLSearchParams(prevParams);
+      newParams.set("query", encodeURIComponent(inputQuery));
+      newParams.set("page", 0);
+
+      if (prevParams.get("searchType") === "advanced") {
+        newParams.set("searchType", "advanced");
+      } else {
+        newParams.set("searchType", "regular");
+      }
+
+      return newParams;
     });
   };
 
@@ -215,6 +235,7 @@ const ResultsPage = () => {
               });
             }}
           />
+
           <Label htmlFor="advanced-search-toggle">Advanced Search</Label>
         </div>
       </div>
@@ -294,12 +315,14 @@ const ResultsPage = () => {
                   {result.body}
                 </p>
                 <div className="flex flex-wrap space-x-2 gap-y-2 mt-2">
-                  {result.tags.split("|").map(
+                  {result.cluster_tags.map(
                     (tag, i) =>
                       tag && (
                         <span
                           key={i}
-                          className="text-center bg-yellow-200 text-yellow-700 text-xs font-semibold px-2 py-1 rounded-full flex items-center space-x-1"
+                          className={`text-center text-xs font-semibold px-2 py-1 rounded-full flex items-center space-x-1 ${
+                            tagColors[i % tagColors.length]
+                          }`}
                         >
                           ✏️ {tag}
                         </span>
